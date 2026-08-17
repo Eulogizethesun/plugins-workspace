@@ -493,13 +493,38 @@ impl Builder {
                             #[cfg(not(target_env = "ohos"))]
                             let minimized = window_clone.is_minimized().unwrap_or_default();
                             if !minimized {
-                                let mut c = cache.lock().unwrap();
-                                if let Some(state) = c.get_mut(&label) {
-                                    state.prev_x = state.x;
-                                    state.prev_y = state.y;
-
-                                    state.x = position.x;
-                                    state.y = position.y;
+                                // OHOS: use try_lock instead of a blocking lock. During a Moved
+                                // (window drag) storm, another main-thread path may hold this lock and
+                                // issue a synchronous NAPI call (OHOS window getters use
+                                // get_main_thread_env + func.call, not a run_on_main_thread/recv
+                                // channel); a blocking lock here would contend with it and stall the
+                                // main thread, leading to appfreeze (THREAD_BLOCK_6S, symbolicated
+                                // 2026-08-13). try_lock skips the contended frame instead of stalling.
+                                // Skipping a frame does not lose the final state: the explicit save
+                                // command re-queries the current position via update_state before
+                                // persisting (OHOS skips the RunEvent::Exit auto-save). Other platforms
+                                // short-circuit their event loop and stay non-blocking, so they keep
+                                // the original lock.
+                                #[cfg(target_env = "ohos")]
+                                {
+                                    if let Ok(mut c) = cache.try_lock() {
+                                        if let Some(state) = c.get_mut(&label) {
+                                            state.prev_x = state.x;
+                                            state.prev_y = state.y;
+                                            state.x = position.x;
+                                            state.y = position.y;
+                                        }
+                                    }
+                                }
+                                #[cfg(not(target_env = "ohos"))]
+                                {
+                                    let mut c = cache.lock().unwrap();
+                                    if let Some(state) = c.get_mut(&label) {
+                                        state.prev_x = state.x;
+                                        state.prev_y = state.y;
+                                        state.x = position.x;
+                                        state.y = position.y;
+                                    }
                                 }
                             }
                         }
@@ -531,10 +556,33 @@ impl Builder {
                                 !window_clone.is_minimized().unwrap_or_default() && !is_maximized
                             };
                             if save {
-                                let mut c = cache.lock().unwrap();
-                                if let Some(state) = c.get_mut(&label) {
-                                    state.width = size.width;
-                                    state.height = size.height;
+                                // OHOS: use try_lock instead of a blocking lock. During a Resized
+                                // (window scaling) storm, another main-thread path may hold this lock
+                                // and issue a synchronous NAPI call (OHOS window getters use
+                                // get_main_thread_env + func.call, not a run_on_main_thread/recv
+                                // channel); a blocking lock here would contend and stall the main
+                                // thread -> appfreeze (THREAD_BLOCK_6S, symbolicated at the original
+                                // cache.lock().unwrap() on this line, 2026-08-13). try_lock skips the
+                                // contended frame. Skipping a frame does not lose the final state: the
+                                // explicit save command re-queries the current size via update_state
+                                // before persisting (OHOS skips the RunEvent::Exit auto-save). Other
+                                // platforms keep the original lock.
+                                #[cfg(target_env = "ohos")]
+                                {
+                                    if let Ok(mut c) = cache.try_lock() {
+                                        if let Some(state) = c.get_mut(&label) {
+                                            state.width = size.width;
+                                            state.height = size.height;
+                                        }
+                                    }
+                                }
+                                #[cfg(not(target_env = "ohos"))]
+                                {
+                                    let mut c = cache.lock().unwrap();
+                                    if let Some(state) = c.get_mut(&label) {
+                                        state.width = size.width;
+                                        state.height = size.height;
+                                    }
                                 }
                             }
                         }
