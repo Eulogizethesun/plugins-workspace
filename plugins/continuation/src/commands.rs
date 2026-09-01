@@ -1,4 +1,4 @@
-// Copyright 2019-2024 Tauri Programme within the Commons Conservancy
+// Copyright 2019-2024 Tauri Programme within The Commons Conservancy
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
@@ -15,6 +15,6 @@ pub async fn get_continuation_data() -> Result<Option<String>> {
 }
 
 #[tauri::command]
-pub async fn set_continuation_data(data: String) -> Result<()> {
+pub async fn set_continuation_data(_data: String) -> Result<()> {
     Err(Error::Unsupported)
 }
