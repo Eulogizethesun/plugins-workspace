@@ -2,6 +2,10 @@
   "name": "@tauri-apps/plugin-screenshot",
   "version": "0.1.0",
   "license": "MIT OR Apache-2.0",
+  "authors": [
+    "Tauri Programme within The Commons Conservancy"
+  ],
+  "repository": "https://github.com/tauri-apps/plugins-workspace",
   "type": "module",
   "types": "./dist-js/index.d.ts",
   "main": "./dist-js/index.cjs",

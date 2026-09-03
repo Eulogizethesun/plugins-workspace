@@ -1,4 +1,4 @@
-// Copyright 2019-2024 Tauri Programme within the Commons Conservancy
+// Copyright 2019-2024 Tauri Programme within The Commons Conservancy
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
@@ -12,6 +12,32 @@ mod ohos;
 mod error;
 
 pub use error::{Error, Result};
+
+use serde::Serialize;
+
+/// A webview screenshot returned to JS (base64 PNG + pixel dimensions).
+///
+/// The bridge facade's `CapturedImage` is a pure Rust type without serde; this DTO is
+/// the wire shape (`camelCase` per plugin convention). Shared by the OHOS
+/// implementation and the non-OHOS stubs so both platform branches expose the
+/// same command signatures.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapturedImageDto {
+    pub png_base64: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// A single pixel's color channels (0-255 each).
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RgbaDto {
+    pub r: u32,
+    pub g: u32,
+    pub b: u32,
+    pub a: u32,
+}
 
 use tauri::{
     plugin::{Builder as PluginBuilder, TauriPlugin},
