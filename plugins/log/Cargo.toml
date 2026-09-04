@@ -47,6 +47,9 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
   "NSString",
 ] }
 
+[target."cfg(target_env = \"ohos\")".dependencies]
+hilog = "0.2"
+
 [features]
 colored = ["fern/colored"]
 tracing = ["dep:tracing"]
