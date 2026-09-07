@@ -276,6 +276,11 @@ impl Builder {
     }
 
     // ── OHOS build: registers AppGallery-backed commands only ────────
+    // The desktop commands (check/download/install/download_and_install) are
+    // intentionally NOT registered on OHOS — updates are AppGallery-owned and
+    // the desktop API contract (resolve = installed, progress channel, options)
+    // cannot be honored. OHOS aligns with the upstream android/ios stance;
+    // use `checkAppGalleryUpdate` / `showAppGalleryUpdateDialog` instead.
     #[cfg(target_env = "ohos")]
     pub fn build<R: Runtime>(self) -> TauriPlugin<R, Config> {
         PluginBuilder::<R, Config>::new("updater")
