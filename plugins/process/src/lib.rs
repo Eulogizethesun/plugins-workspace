@@ -28,5 +28,27 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             #[cfg(not(target_env = "ohos"))]
             commands::restart,
         ])
+        .setup(|_app, _api| {
+            // OHOS: register the Rust-side bridge plugin (ProcessBridgePlugin,
+            // id "ohos.process") BEFORE any restart command can dispatch
+            // through it, so the declaration flows to ArkTS and the
+            // ProcessPlugin factory is selected during configurePlugins.
+            // Mirrors the updater plugin's setup. APP-None is unreachable
+            // (setup runs after mobile_entry_point! installs the app);
+            // register_plugin is non-idempotent (Err on duplicate) so failures
+            // are log-only, never propagate.
+            #[cfg(target_env = "ohos")]
+            {
+                use openharmony_ability::ProcessBridgePlugin;
+                if let Ok(guard) = tauri::ohos::APP.lock() {
+                    if let Some(ohos_app) = guard.as_ref() {
+                        if let Err(e) = ohos_app.register_plugin(ProcessBridgePlugin) {
+                            log::error!("[process] failed to register ProcessBridgePlugin: {e}");
+                        }
+                    }
+                }
+            }
+            Ok(())
+        })
         .build()
 }

@@ -280,10 +280,8 @@ impl Builder {
     pub fn build<R: Runtime>(self) -> TauriPlugin<R, Config> {
         PluginBuilder::<R, Config>::new("updater")
             .invoke_handler(tauri::generate_handler![
-                ohos::check,
-                ohos::download,
-                ohos::install,
-                ohos::download_and_install,
+                ohos::check_app_gallery_update,
+                ohos::show_app_gallery_update_dialog,
             ])
             .setup(move |_app, _api| {
                 // Register the Rust-side bridge plugin (UpdaterBridgePlugin, id
