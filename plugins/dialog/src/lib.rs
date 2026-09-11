@@ -399,6 +399,10 @@ pub(crate) struct FileDialogPayload<'a> {
     file_name: &'a Option<String>,
     filters: &'a Vec<Filter>,
     multiple: bool,
+    /// `true` picks directories instead of files (OHOS: DocumentViewPicker
+    /// selectMode MIXED/FOLDER, Eulogizethesun/tauri#99). Ignored by the
+    /// save/message paths.
+    directory: bool,
     picker_mode: &'a Option<PickerMode>,
     file_access_mode: &'a Option<FileAccessMode>,
 }
@@ -424,11 +428,12 @@ impl<R: Runtime> FileDialogBuilder<R> {
     }
 
     #[cfg(any(mobile, target_env = "ohos"))]
-    pub(crate) fn payload(&self, multiple: bool) -> FileDialogPayload<'_> {
+    pub(crate) fn payload(&self, multiple: bool, directory: bool) -> FileDialogPayload<'_> {
         FileDialogPayload {
             file_name: &self.file_name,
             filters: &self.filters,
             multiple,
+            directory,
             picker_mode: &self.picker_mode,
             file_access_mode: &self.file_access_mode,
         }
@@ -600,7 +605,7 @@ impl<R: Runtime> FileDialogBuilder<R> {
     ///     Ok(())
     ///   });
     /// ```
-    #[cfg(all(desktop, not(target_env = "ohos")))]
+    #[cfg(any(desktop, target_env = "ohos"))]
     pub fn pick_folder<F: FnOnce(Option<FilePath>) + Send + 'static>(self, f: F) {
         pick_folder(self, f)
     }
@@ -625,7 +630,7 @@ impl<R: Runtime> FileDialogBuilder<R> {
     ///     Ok(())
     ///   });
     /// ```
-    #[cfg(all(desktop, not(target_env = "ohos")))]
+    #[cfg(any(desktop, target_env = "ohos"))]
     pub fn pick_folders<F: FnOnce(Option<Vec<FilePath>>) + Send + 'static>(self, f: F) {
         pick_folders(self, f)
     }
@@ -719,7 +724,7 @@ impl<R: Runtime> FileDialogBuilder<R> {
     ///   // the folder path is `None` if the user closed the dialog
     /// }
     /// ```
-    #[cfg(all(desktop, not(target_env = "ohos")))]
+    #[cfg(any(desktop, target_env = "ohos"))]
     pub fn blocking_pick_folder(self) -> Option<FilePath> {
         blocking_fn!(self, pick_folder)
     }
@@ -742,7 +747,7 @@ impl<R: Runtime> FileDialogBuilder<R> {
     ///   // the folder paths value is `None` if the user closed the dialog
     /// }
     /// ```
-    #[cfg(all(desktop, not(target_env = "ohos")))]
+    #[cfg(any(desktop, target_env = "ohos"))]
     pub fn blocking_pick_folders(self) -> Option<Vec<FilePath>> {
         blocking_fn!(self, pick_folders)
     }
