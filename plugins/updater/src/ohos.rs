@@ -74,11 +74,10 @@ pub(crate) async fn check_app_gallery_update<R: Runtime>(
             current_version: r.current_version,
             // The SDK 12 ArkTS fallback is the literal "unknown" (on API < 20
             // the new version number is not available); map that and the empty
-            // string to `None` so JS can rely on `version == null`.
-            version: match r.version.as_str() {
-                "unknown" | "" => None,
-                v => Some(v.to_string()),
-            },
+            // string to `None` so JS can rely on `version == null`. Since
+            // openharmony-ability#51 the bridge itself returns `Option<String>`
+            // (null on API < 20), which is passed through here.
+            version: r.version.filter(|v| !v.is_empty() && v != "unknown"),
         }),
         Err(e) => Err(Error::Network(e.reason.to_string())),
     }
