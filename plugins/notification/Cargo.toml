@@ -18,7 +18,7 @@ linux = { level = "full", notes = "" }
 macos = { level = "full", notes = "" }
 android = { level = "full", notes = "" }
 ios = { level = "full", notes = "" }
-openharmony = { level = "partial", notes = "Text/long/multiline notifications, permissions, channels, action buttons (click callback limited—no event emission bridge), foreground scheduling via setTimeout. Background scheduling via reminderAgentManager not implemented." }
+openharmony = { level = "partial", notes = "Text/long/multiline notifications, permissions, channels (emulated over 4 system slot types), action buttons with actionPerformed click events (received-events not emitted; buttons are text-only; needs the EntryAbility wiring shipped in the tauri-cli open-harmony template); active() always returns an empty list. Scheduling publishes reminderAgentManager system reminders that fire while the app is backgrounded or killed (at, interval, every day/week/month/year); a one-shot `at` already due fires immediately, while schedules with no reminder equivalent (every hour/minute/second/twoWeeks, every with count > 1, past repeating dates, expired interval rules, interval rules mixing month/day with weekday) reject; reminders are quota-managed — the AGC agent-reminder entitlement and the `PUBLISH_AGENT_REMINDER` permission are required." }
 
 [build-dependencies]
 tauri-plugin = { workspace = true, features = ["build"] }

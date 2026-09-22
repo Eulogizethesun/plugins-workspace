@@ -36,6 +36,17 @@ async function writeText(
 
 /**
  * Gets the clipboard content as plain text.
+ *
+ * #### Platform-specific
+ *
+ * - **HarmonyOS (OHOS):** Reading the pasteboard requires the
+ *   `ohos.permission.READ_PASTEBOARD` user-grant permission (API 12+); the
+ *   plugin requests it on first read — when denied or undeclared the call
+ *   resolves with an empty string, as if the clipboard were empty. The
+ *   permission must be declared in the app's entry module.json5 (with
+ *   reason/usedScene) and included in the AGC signing profile (ACL) — see the
+ *   README's "OpenHarmony (OHOS) Permissions" section.
+ *
  * @example
  * ```typescript
  * import { readText } from '@tauri-apps/plugin-clipboard-manager';
@@ -126,7 +137,10 @@ async function writeImage(
  * - **HarmonyOS (OHOS):** Supported. Reading the pasteboard requires the
  *   `ohos.permission.READ_PASTEBOARD` user-grant permission (API 12+); the
  *   plugin requests it on first read — when denied or undeclared the call
- *   rejects as if the clipboard held no image.
+ *   rejects as if the clipboard held no image. The permission must be declared
+ *   in the app's entry module.json5 (with reason/usedScene) and included in
+ *   the AGC signing profile (ACL) — see the README's "HarmonyOS (OHOS)
+ *   Permissions" section.
  *
  * @example
  * ```typescript

@@ -98,9 +98,7 @@ interface PendingEntry {
   title: string;
   body: string;
   schedule: object;
-  // Foreground-timer entries (fallback path): the setTimeout/setInterval id.
-  timerId?: number;
-  // reminderAgentManager entries (primary path): the system reminder id.
+  // reminderAgentManager entries: the system reminder id.
   reminderId?: number;
 }
 
@@ -108,7 +106,9 @@ interface PendingNotification {
   id: number;
   title: string;
   body: string;
-  schedule: object;
+  // Optional: entries recovered from the system after a process restart may
+  // lose their schedule (one-shot countdown reminders store no absolute date).
+  schedule?: object;
 }
 
 interface ChannelConfig {
@@ -200,7 +200,7 @@ export class NotificationPlugin extends Plugin {
   private slotTypeRefCount: Map<number, number> = new Map();
   // Registered action types: actionTypeId → definition with actions
   private actionTypeMap: Map<string, RegisteredActionType> = new Map();
-  // Pending notifications scheduled via foreground timers
+  // Pending notifications scheduled as system reminders
   private pendingMap: Map<number, PendingEntry> = new Map();
   // Registered event listener channels: event name → channel id.
   // Populated by registerListener; used by onNotificationAction to emit.
@@ -237,7 +237,7 @@ export class NotificationPlugin extends Plugin {
       const id = args.id ?? 0;
 
       // If a schedule is present, defer to the scheduling path (system
-      // reminderAgentManager proxy with foreground-timer fallback, #114)
+      // reminderAgentManager, #114)
       if (args.schedule != null) {
         this.scheduleNotification(id, args, invoke);
         return;
@@ -342,32 +342,42 @@ export class NotificationPlugin extends Plugin {
     return buttons;
   }
 
-  // ─── scheduling (background reminders + foreground timer fallback) ───
+  // ─── scheduling (system reminders) ───
 
   /**
    * Schedules a notification (issue Eulogizethesun/tauri#114).
    *
-   * Primary path: reminderAgentManager.publishReminder — the system proxies
-   * the reminder when the app is backgrounded or killed, which is what
-   * alarm/calendar use cases need. Schedule → reminder mapping:
-   *   at (one-shot)  → ReminderRequestTimer (countdown)
-   *   at (repeating) → ReminderRequestCalendar repeating monthly on that
-   *                    day/time (approximation; Android repeats with the
-   *                    initial delay as period — also an approximation)
-   *   interval       → ReminderRequestCalendar at the next field match with
-   *                    repeat rules from the matched fields (DateMatch
-   *                    semantics, matching Android; month+day → yearly,
-   *                    day → monthly, weekday → weekly, time-only → daily)
+   * Path: reminderAgentManager.publishReminder — the system proxies the
+   * reminder when the app is backgrounded or killed, which is what
+   * alarm/calendar use cases need. Any publishReminder failure rejects the
+   * invoke (matching iOS, where a failing center.add rejects). Schedule →
+   * reminder mapping:
+   *   at (one-shot, future)  → ReminderRequestTimer (countdown)
+   *   at (one-shot, due now) → immediate foreground publish (no reminder;
+   *                            shows up in active, not pending)
+   *   at (repeating, future) → ReminderRequestCalendar repeating monthly on
+   *                            that day/time (approximation; Android repeats
+   *                            with the initial delay as period — also an
+   *                            approximation)
+   *   at (repeating, past)   → reject
+   *   interval               → ReminderRequestCalendar at the next field
+   *                            match with repeat rules from the matched
+   *                            fields (DateMatch semantics, matching
+   *                            Android; year set → one-shot; month+day →
+   *                            yearly, day → monthly, month alone → every
+   *                            day of that month, weekday → weekly,
+   *                            time-only → daily; no future match → reject)
    *   every (day/week/month/year, count=1) → Calendar anchored at now+1 unit
-   *   every (hour/minute/second/twoWeeks, or count>1) → not expressible (the
-   *                    system has no arbitrary-period repeats)
+   *   every (hour/minute/second/twoWeeks, or count>1) → reject (Timer-type
+   *                            reminders require a repeatInterval >= 86400 s
+   *                            and API 26+, so sub-day repeats are not
+   *                            expressible as system reminders)
    *
-   * Fallback: publishReminder is entitlement-gated on some devices — normal apps without
-   * the AGC agent-reminder entitlement get a reminder quota of 0 (error
-   * 1700002), and it fails with 1700001 when notifications are disabled. Any
-   * failure, or a non-expressible schedule, degrades to the historical
-   * foreground setTimeout/setInterval behavior (fires only while the app is
-   * alive; timers are cleared on exit).
+   * Interval rules mixing month/day with weekday (e.g. {month, weekday})
+   * reject: the official docs do not define ReminderRequestCalendar's
+   * combination semantics for daysOfWeek together with
+   * repeatMonths/repeatDays (review R40 — revisit if device verification
+   * defines them).
    *
    * Reminder datetime conventions (official API reference, do not mix up):
    *   LocalDateTime.month / repeatMonths: [1, 12]; repeatDays: [1, 31];
@@ -379,19 +389,23 @@ export class NotificationPlugin extends Plugin {
       const schedule = args.schedule as ScheduleWrapper;
       const reminder = this.buildReminderRequest(id, args, schedule);
       if (reminder != null) {
-        this.publishReminderWithFallback(id, args, reminder, invoke);
+        this.publishReminder(id, args, reminder, invoke);
         return;
       }
-      this.scheduleViaForegroundTimer(id, args, schedule, invoke);
+      // null → one-shot 'at' already due: publish immediately in the
+      // foreground (no system reminder; the notification shows up in
+      // active, not pending).
+      this.doScheduledPublish(id, args);
+      invoke.resolve(JSON.stringify(id));
     } catch (e) {
       const err = e as BusinessError;
       console.error('[NotificationPlugin] schedule failed: ' + err.message);
-      invoke.reject('Schedule failed: ' + err.message);
+      invoke.reject(err.message);
     }
   }
 
-  /** Publishes a system reminder; any failure falls back to a foreground timer. */
-  private async publishReminderWithFallback(
+  /** Publishes a system reminder; any failure rejects the invoke (iOS-style). */
+  private async publishReminder(
     id: number,
     args: NotificationData,
     reminder: reminderAgentManager.ReminderRequest,
@@ -410,19 +424,26 @@ export class NotificationPlugin extends Plugin {
       invoke.resolve(JSON.stringify(id));
     } catch (e) {
       const err = e as BusinessError;
-      // 201 (PUBLISH_AGENT_REMINDER missing) / 1700001 (notification
-      // disabled) / 1700002 (quota exceeded — the no-entitlement case)
-      // → degrade to the foreground timer path.
-      console.warn('[NotificationPlugin] publishReminder failed (code=' + err.code + '): ' + err.message + ' — falling back to foreground timer');
-      this.scheduleViaForegroundTimer(id, args, args.schedule as ScheduleWrapper, invoke);
+      // 201 (PUBLISH_AGENT_REMINDER permission missing) / 1700001
+      // (notifications disabled) / 1700002 (reminder quota exceeded).
+      // Attributions follow the official error-code reference.
+      console.error('[NotificationPlugin] publishReminder failed (code=' + err.code + '): ' + err.message);
+      let hint: string = '';
+      if (err.code === 1700001) {
+        hint = ' — notifications are not enabled for this app (requestEnableNotification or system settings)';
+      } else if (err.code === 1700002) {
+        hint = ' — reminder quota exceeded (a normal app without the AGC agent-reminder entitlement counts as quota 0, or the per-app reminder limit was reached)';
+      } else if (err.code === 201) {
+        hint = ' — ohos.permission.PUBLISH_AGENT_REMINDER is not granted';
+      }
+      invoke.reject('Schedule failed: publishReminder error ' + err.code + ': ' + err.message + hint);
     }
   }
 
   /**
-   * Builds a ReminderRequest from a schedule, or null when the schedule is
-   * invalid / not expressible as a system reminder (the caller then falls
-   * back to a foreground timer, which also produces the legacy error message
-   * for invalid dates).
+   * Builds a ReminderRequest from a schedule. Returns null only for a
+   * one-shot 'at' that is already due (the caller then publishes
+   * immediately); every other invalid or non-expressible schedule throws.
    */
   private buildReminderRequest(
     id: number,
@@ -436,12 +457,12 @@ export class NotificationPlugin extends Plugin {
     if (schedule.at != null) {
       const timestamp = Date.parse(schedule.at.date);
       if (isNaN(timestamp)) {
-        return null;
+        throw new Error('Invalid schedule date: ' + schedule.at.date);
       }
       if (!schedule.at.repeating) {
         const seconds = Math.ceil((timestamp - Date.now()) / 1000);
         if (seconds < 1) {
-          return null; // due now/overdue → immediate publish via the timer path (delay 0)
+          return null; // due now/overdue → the caller publishes immediately
         }
         const timer: reminderAgentManager.ReminderRequestTimer = {
           reminderType: reminderAgentManager.ReminderType.REMINDER_TYPE_TIMER,
@@ -454,7 +475,9 @@ export class NotificationPlugin extends Plugin {
         return timer;
       }
       if (timestamp <= Date.now()) {
-        return null; // repeating at a past date — keep the legacy clamp behavior
+        // The legacy fallback clamped this to a 0-delay setInterval (a
+        // notification firestorm); iOS rejects past repeating dates too.
+        throw new Error('Scheduled date is in the past: ' + schedule.at.date);
       }
       const dt = new Date(timestamp);
       const calendar: reminderAgentManager.ReminderRequestCalendar = {
@@ -474,7 +497,7 @@ export class NotificationPlugin extends Plugin {
       const fields = schedule.interval.interval;
       const next = this.nextDateMatch(fields);
       if (next == null) {
-        return null;
+        throw new Error('No future date matches the schedule fields');
       }
       const calendar: reminderAgentManager.ReminderRequestCalendar = {
         reminderType: reminderAgentManager.ReminderType.REMINDER_TYPE_CALENDAR,
@@ -485,17 +508,36 @@ export class NotificationPlugin extends Plugin {
         slotType: slotType
       };
       if (fields.year == null) {
+        // ReminderRequestCalendar's combination semantics for daysOfWeek
+        // mixed with repeatMonths/repeatDays are not defined by the official
+        // docs — those combinations reject instead of silently dropping
+        // fields (review R40).
         if (fields.month != null && fields.day != null) {
+          if (fields.weekday != null) {
+            throw new Error('Unsupported schedule: combining month/day with weekday has no defined HarmonyOS reminder semantics');
+          }
           // yearly on that month/day
           calendar.repeatMonths = [fields.month];
           calendar.repeatDays = [fields.day];
-        } else if (fields.day != null && fields.weekday == null) {
+        } else if (fields.day != null) {
+          if (fields.weekday != null) {
+            throw new Error('Unsupported schedule: combining day with weekday has no defined HarmonyOS reminder semantics');
+          }
           // monthly on that day of month (repeatMonths required with repeatDays)
           calendar.repeatMonths = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
           calendar.repeatDays = [fields.day];
         } else if (fields.weekday != null) {
+          if (fields.month != null) {
+            throw new Error('Unsupported schedule: combining month with weekday has no defined HarmonyOS reminder semantics');
+          }
           // weekly on that weekday (tauri 1=Sun..7=Sat → OHOS Mon=1..Sun=7)
           calendar.daysOfWeek = [fields.weekday === 1 ? 7 : fields.weekday - 1];
+        } else if (fields.month != null) {
+          // month alone → every day of that month, each year (repeatMonths
+          // paired with the full repeatDays range, mirroring the day-only
+          // monthly mapping; months without days 29-31 just skip them)
+          calendar.repeatMonths = [fields.month];
+          calendar.repeatDays = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31];
         } else {
           // time-of-day only → daily
           calendar.daysOfWeek = [1, 2, 3, 4, 5, 6, 7];
@@ -509,11 +551,18 @@ export class NotificationPlugin extends Plugin {
       const unit = schedule.every.interval;
       const count = schedule.every.count > 0 ? schedule.every.count : 1;
       // The reminder system only supports calendar-rule repeats; arbitrary
-      // N-unit periods and sub-day units have no equivalent.
+      // N-unit periods and sub-day units have no equivalent (Timer-type
+      // reminders require a repeatInterval >= 86400 s, API 26+).
       if (count !== 1 || unit === 'hour' || unit === 'minute' || unit === 'second' || unit === 'twoWeeks') {
-        return null;
+        throw new Error("Unsupported schedule: every '" + unit + "' (count=" + count + ") has no HarmonyOS system-reminder equivalent");
       }
       const anchor = new Date();
+      // Capture launch-time fields BEFORE any Date arithmetic: setMonth /
+      // setFullYear overflow rolls short-month days into the next month
+      // (Jan 31 + 1 month -> Mar 3) and would poison the repeat fields
+      // below (review R39).
+      const launchMonth = anchor.getMonth(); // 0-based
+      const launchDay = anchor.getDate();
       let daysOfWeek: number[] | undefined = undefined;
       let repeatMonths: number[] | undefined = undefined;
       let repeatDays: number[] | undefined = undefined;
@@ -528,17 +577,29 @@ export class NotificationPlugin extends Plugin {
           daysOfWeek = [anchor.getDay() === 0 ? 7 : anchor.getDay()];
           break;
         case 'month':
-          anchor.setMonth(anchor.getMonth() + 1);
+          // Repeat on the launch day-of-month (months without that day are
+          // expected to be skipped by the system, matching the repeating
+          // `at` semantics).
           repeatMonths = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
-          repeatDays = [anchor.getDate()];
+          repeatDays = [launchDay];
+          // First trigger: next month, day clamped into that month's length.
+          // setDate(1) FIRST — clamping after the rollover pins the wrong
+          // month (Jan 31 -> Mar 3 -> setDate(28) yields Mar 28, not Feb 28).
+          anchor.setDate(1);
+          anchor.setMonth(anchor.getMonth() + 1);
+          anchor.setDate(Math.min(launchDay, this.daysInMonth(anchor.getFullYear(), anchor.getMonth())));
           break;
         case 'year':
+          // Repeat on the launch month/day (a Feb-29 schedule is expected
+          // to fire only in leap years).
+          repeatMonths = [launchMonth + 1];
+          repeatDays = [launchDay];
+          anchor.setDate(1);
           anchor.setFullYear(anchor.getFullYear() + 1);
-          repeatMonths = [anchor.getMonth() + 1];
-          repeatDays = [anchor.getDate()];
+          anchor.setDate(Math.min(launchDay, this.daysInMonth(anchor.getFullYear(), anchor.getMonth())));
           break;
         default:
-          return null;
+          throw new Error("Unsupported schedule: every '" + unit + "' has no HarmonyOS system-reminder equivalent");
       }
       const calendar: reminderAgentManager.ReminderRequestCalendar = {
         reminderType: reminderAgentManager.ReminderType.REMINDER_TYPE_CALENDAR,
@@ -554,7 +615,7 @@ export class NotificationPlugin extends Plugin {
       return calendar;
     }
 
-    return null;
+    throw new Error('Unsupported schedule format');
   }
 
   /** Resolves the notification SlotType for a payload (channel map → importance default). */
@@ -578,6 +639,11 @@ export class NotificationPlugin extends Plugin {
       minute: dt.getMinutes(),
       second: dt.getSeconds()
     };
+  }
+
+  /** Last day of a JS 0-based month, e.g. daysInMonth(2027, 1) === 28. */
+  private daysInMonth(year: number, month: number): number {
+    return new Date(year, month + 1, 0).getDate();
   }
 
   /**
@@ -621,70 +687,11 @@ export class NotificationPlugin extends Plugin {
   }
 
   /**
-   * Legacy scheduling path: foreground setTimeout/setInterval.
-   *
-   * Limitations (why this is only the fallback since #114):
-   * - Only works while the app is in the foreground (timers are cleared on exit)
-   * - Repeating schedules use setInterval with the initial delay as the repeat period
+   * Immediate foreground publish for one-shot `at` schedules that are
+   * already due (review R40: no system reminder, no timer fallback — the
+   * notification shows up in active, not pending). Best-effort: publish
+   * failures are logged, not rejected.
    */
-  private scheduleViaForegroundTimer(id: number, args: NotificationData, schedule: ScheduleWrapper, invoke: Invoke): void {
-    try {
-      const title = args.title ?? '';
-      const body = args.body ?? '';
-
-      let delayMs: number = 0;
-      let repeating: boolean = false;
-
-      if (schedule.at != null) {
-        const timestamp = Date.parse(schedule.at.date);
-        if (isNaN(timestamp)) {
-          invoke.reject('Invalid schedule date: ' + schedule.at.date);
-          return;
-        }
-        delayMs = timestamp - Date.now();
-        if (delayMs < 0) {
-          delayMs = 0;
-        }
-        repeating = schedule.at.repeating;
-      } else if (schedule.interval != null) {
-        delayMs = this.intervalToMs(schedule.interval.interval);
-        repeating = true; // interval schedules repeat
-      } else if (schedule.every != null) {
-        delayMs = this.everyToMs(schedule.every.interval, schedule.every.count);
-        repeating = true; // every schedules repeat
-      } else {
-        invoke.reject('Unsupported schedule format');
-        return;
-      }
-
-      const self = this;
-      const publishFn = (): void => {
-        self.doScheduledPublish(id, args);
-      };
-
-      let timerId: number;
-      if (repeating) {
-        timerId = setInterval(publishFn, delayMs);
-      } else {
-        timerId = setTimeout(publishFn, delayMs);
-      }
-
-      this.pendingMap.set(id, {
-        id: id,
-        title: title,
-        body: body,
-        schedule: args.schedule as object,
-        timerId: timerId
-      });
-
-      invoke.resolve(JSON.stringify(id));
-    } catch (e) {
-      const err = e as BusinessError;
-      console.error('[NotificationPlugin] schedule failed: ' + err.message);
-      invoke.reject('Schedule failed: ' + err.message);
-    }
-  }
-
   private async doScheduledPublish(id: number, args: NotificationData): Promise<void> {
     try {
       const request = await this.buildRequest(id, args);
@@ -693,38 +700,6 @@ export class NotificationPlugin extends Plugin {
       const err = e as BusinessError;
       console.error('[NotificationPlugin] scheduled publish failed: ' + err.message);
     }
-  }
-
-  /** Converts a ScheduleInterval to milliseconds (approximate). */
-  private intervalToMs(interval: ScheduleIntervalFields): number {
-    let ms: number = 0;
-    if (interval.year != null) ms += interval.year * 365 * 24 * 60 * 60 * 1000;
-    if (interval.month != null) ms += interval.month * 30 * 24 * 60 * 60 * 1000;
-    if (interval.day != null) ms += interval.day * 24 * 60 * 60 * 1000;
-    if (interval.hour != null) ms += interval.hour * 60 * 60 * 1000;
-    if (interval.minute != null) ms += interval.minute * 60 * 1000;
-    if (interval.second != null) ms += interval.second * 1000;
-    if (ms <= 0) {
-      ms = 60 * 1000; // default 1 minute
-    }
-    return ms;
-  }
-
-  /** Converts a ScheduleEvery (interval string + count) to milliseconds. */
-  private everyToMs(interval: string, count: number): number {
-    let unitMs: number;
-    switch (interval) {
-      case 'year': unitMs = 365 * 24 * 60 * 60 * 1000; break;
-      case 'month': unitMs = 30 * 24 * 60 * 60 * 1000; break;
-      case 'twoWeeks': unitMs = 14 * 24 * 60 * 60 * 1000; break;
-      case 'week': unitMs = 7 * 24 * 60 * 60 * 1000; break;
-      case 'day': unitMs = 24 * 60 * 60 * 1000; break;
-      case 'hour': unitMs = 60 * 60 * 1000; break;
-      case 'minute': unitMs = 60 * 1000; break;
-      case 'second': unitMs = 1000; break;
-      default: unitMs = 60 * 1000; break;
-    }
-    return unitMs * count;
   }
 
   private buildContent(args: NotificationData): notificationManager.NotificationContent {
@@ -820,8 +795,8 @@ export class NotificationPlugin extends Plugin {
       const argsStr = invoke.parseArgs();
 
       if (argsStr === '' || argsStr === 'null' || argsStr === '{}') {
-        // cancelAll: clear all pending timers/reminders + system notifications
-        this.clearAllPending();
+        // cancelAll: clear all pending reminders + system notifications
+        await this.clearAllPending();
         try {
           await reminderAgentManager.cancelAllReminders();
         } catch (reminderErr) {
@@ -839,7 +814,7 @@ export class NotificationPlugin extends Plugin {
 
       if (notifications != null && notifications.length > 0) {
         for (const id of notifications) {
-          this.clearPending(id);
+          await this.clearPending(id);
           try {
             await notificationManager.cancel(id);
           } catch (cancelErr) {
@@ -848,7 +823,7 @@ export class NotificationPlugin extends Plugin {
           }
         }
       } else {
-        this.clearAllPending();
+        await this.clearAllPending();
         await notificationManager.cancelAll();
       }
 
@@ -860,32 +835,64 @@ export class NotificationPlugin extends Plugin {
     }
   }
 
-  /** Clears a single pending entry (foreground timer and/or system reminder) by notification ID. */
-  private clearPending(id: number): void {
+  /**
+   * Clears a single pending entry (system reminder) by notification ID.
+   * When the entry is no longer tracked (e.g. after a process restart the
+   * in-memory map is gone while the system-proxied reminder is still
+   * valid), reconciles with the system and cancels every valid reminder
+   * published with this notification ID (#123). Best-effort: failures are
+   * logged and swallowed.
+   */
+  private async clearPending(id: number): Promise<void> {
     const entry = this.pendingMap.get(id);
     if (entry != null) {
-      if (entry.timerId != null) {
-        clearTimeout(entry.timerId);
-      }
       if (entry.reminderId != null) {
-        // Fire-and-forget; 1700003 (already fired/removed) is tolerated.
         const reminderId = entry.reminderId;
-        reminderAgentManager.cancelReminder(reminderId).catch((e: BusinessError) => {
-          console.warn('[NotificationPlugin] cancelReminder(' + reminderId + ') failed: ' + e.message);
-        });
+        try {
+          // 1700003 (already fired/removed) is tolerated.
+          await reminderAgentManager.cancelReminder(reminderId);
+        } catch (e) {
+          console.warn('[NotificationPlugin] cancelReminder(' + reminderId + ') failed: ' + (e as BusinessError).message);
+        }
       }
       this.pendingMap.delete(id);
+      return;
+    }
+    // Map miss — the reminder id mapping is lost across process restarts, but
+    // every reminder published by this plugin carries the application
+    // notification id in reminderReq.notificationId (#123). Reminders whose
+    // notificationId is 0/undefined were not published by this plugin (the
+    // field defaults to 0) — never cancel those.
+    try {
+      const reminders: reminderAgentManager.ReminderInfo[] = await reminderAgentManager.getAllValidReminders();
+      for (const info of reminders) {
+        const notificationId = info.reminderReq.notificationId;
+        if (notificationId == null || notificationId === 0) {
+          continue;
+        }
+        if (notificationId !== id) {
+          continue;
+        }
+        try {
+          // 1700003 (already fired/removed) is tolerated.
+          await reminderAgentManager.cancelReminder(info.reminderId);
+        } catch (e) {
+          console.warn('[NotificationPlugin] cancelReminder(' + info.reminderId + ') failed: ' + (e as BusinessError).message);
+        }
+      }
+    } catch (e) {
+      console.warn('[NotificationPlugin] getAllValidReminders failed: ' + (e as BusinessError).message);
     }
   }
 
-  /** Clears all pending timers. */
-  private clearAllPending(): void {
+  /** Clears all pending reminder entries. */
+  private async clearAllPending(): Promise<void> {
     const keys: number[] = [];
     for (const key of this.pendingMap.keys()) {
       keys.push(key);
     }
     for (let i = 0; i < keys.length; i++) {
-      this.clearPending(keys[i]);
+      await this.clearPending(keys[i]);
     }
   }
 
@@ -975,27 +982,156 @@ export class NotificationPlugin extends Plugin {
   // ─── getPending ───
 
   private handleGetPending(invoke: Invoke): void {
+    this.getPendingNotifications(invoke);
+  }
+
+  /**
+   * Assembles the pending list with the system reminder agent as the source of
+   * truth (#123): Map entries whose system reminder is gone are pruned, and
+   * reminders that only exist in the system (e.g. after a process restart)
+   * are recovered. When system enumeration fails, degrades to the historical
+   * Map-only behavior.
+   */
+  private async getPendingNotifications(invoke: Invoke): Promise<void> {
     try {
       const pending: PendingNotification[] = [];
-      const values: PendingEntry[] = [];
-      for (const entry of this.pendingMap.values()) {
-        values.push(entry);
+
+      let reminders: reminderAgentManager.ReminderInfo[] | null = null;
+      try {
+        reminders = await reminderAgentManager.getAllValidReminders();
+      } catch (e) {
+        console.warn('[NotificationPlugin] getAllValidReminders failed: ' + (e as BusinessError).message);
       }
-      for (let i = 0; i < values.length; i++) {
-        const e = values[i];
+
+      // Plugin-published reminders (notificationId set) keyed by application
+      // notification id, plus the ids of every still-valid system reminder.
+      // Reminders whose notificationId is 0/undefined were not published by
+      // this plugin — their ids are only tracked for validity checks.
+      const systemByNotificationId: Map<number, reminderAgentManager.ReminderInfo> = new Map();
+      const validReminderIds: number[] = [];
+      if (reminders != null) {
+        for (const info of reminders) {
+          validReminderIds.push(info.reminderId);
+          const notificationId = info.reminderReq.notificationId;
+          if (notificationId != null && notificationId !== 0 && !systemByNotificationId.has(notificationId)) {
+            systemByNotificationId.set(notificationId, info);
+          }
+        }
+      }
+
+      // Prune Map entries whose system reminder already fired/was canceled.
+      // (Map entries are reminder-only since the foreground-timer fallback
+      // was removed, so every entry carries a reminderId.)
+      if (reminders != null) {
+        const staleKeys: number[] = [];
+        for (const entry of this.pendingMap.values()) {
+          if (entry.reminderId != null && !validReminderIds.includes(entry.reminderId)) {
+            staleKeys.push(entry.id);
+          }
+        }
+        for (let i = 0; i < staleKeys.length; i++) {
+          this.pendingMap.delete(staleKeys[i]);
+        }
+      }
+
+      // Surviving Map entries are output verbatim.
+      for (const entry of this.pendingMap.values()) {
         pending.push({
-          id: e.id,
-          title: e.title,
-          body: e.body,
-          schedule: e.schedule
+          id: entry.id,
+          title: entry.title,
+          body: entry.body,
+          schedule: entry.schedule
         });
       }
+
+      // Recover entries that only exist in the system (process restart):
+      // reminders published by this plugin whose notification id is no longer
+      // tracked in the Map.
+      if (reminders != null) {
+        for (const notificationId of systemByNotificationId.keys()) {
+          if (this.pendingMap.has(notificationId)) {
+            continue;
+          }
+          const info = systemByNotificationId.get(notificationId);
+          if (info == null) {
+            continue;
+          }
+          const recovered: PendingNotification = {
+            id: notificationId,
+            title: info.reminderReq.title ?? '',
+            body: info.reminderReq.content ?? ''
+          };
+          const schedule: ScheduleWrapper | null = this.scheduleFromReminder(info.reminderReq);
+          if (schedule != null) {
+            recovered.schedule = schedule;
+          }
+          pending.push(recovered);
+        }
+      }
+
       invoke.resolve(JSON.stringify(pending));
     } catch (e) {
       const err = e as BusinessError;
       console.error('[NotificationPlugin] getPending failed: ' + err.message);
       invoke.resolve(JSON.stringify([]));
     }
+  }
+
+  /**
+   * Best-effort inverse of buildReminderRequest for entries recovered from the
+   * system (#123). Returns null when no schedule can be rebuilt — countdown
+   * reminders (ReminderRequestTimer) only store a relative trigger offset, so
+   * their original absolute date is not recoverable and the caller omits the
+   * schedule field.
+   */
+  private scheduleFromReminder(req: reminderAgentManager.ReminderRequest): ScheduleWrapper | null {
+    if (req.reminderType !== reminderAgentManager.ReminderType.REMINDER_TYPE_CALENDAR) {
+      return null;
+    }
+    const calendar = req as reminderAgentManager.ReminderRequestCalendar;
+    const dt: reminderAgentManager.LocalDateTime = calendar.dateTime;
+    // Mirror of toLocalDateTime: reconstruct in the local timezone, then emit
+    // an ISO string with UTC offset (the Rust side parses time::OffsetDateTime).
+    const date = new Date(dt.year, dt.month - 1, dt.day, dt.hour, dt.minute, dt.second ?? 0);
+    const iso = date.toISOString();
+    const daysOfWeek = calendar.daysOfWeek;
+    const repeatMonths = calendar.repeatMonths;
+    const repeatDays = calendar.repeatDays;
+    if (daysOfWeek != null && daysOfWeek.length === 7) {
+      // daily (forward: every 'day' / time-of-day-only interval)
+      const every: ScheduleEvery = { interval: 'day', count: 1, allowWhileIdle: false };
+      const wrapper: ScheduleWrapper = { every: every };
+      return wrapper;
+    }
+    if (daysOfWeek != null && daysOfWeek.length === 1) {
+      // weekly on that weekday (forward: every 'week' / weekday interval)
+      const every: ScheduleEvery = { interval: 'week', count: 1, allowWhileIdle: false };
+      const wrapper: ScheduleWrapper = { every: every };
+      return wrapper;
+    }
+    if (repeatMonths != null && repeatMonths.length === 12 && repeatDays != null && repeatDays.length === 1) {
+      // monthly on that day (forward: every 'month' / day interval / repeating at)
+      const every: ScheduleEvery = { interval: 'month', count: 1, allowWhileIdle: false };
+      const wrapper: ScheduleWrapper = { every: every };
+      return wrapper;
+    }
+    if (repeatMonths != null && repeatMonths.length === 1 && repeatDays != null && repeatDays.length === 1) {
+      // yearly on that month/day (forward: every 'year' / month+day interval)
+      const every: ScheduleEvery = { interval: 'year', count: 1, allowWhileIdle: false };
+      const wrapper: ScheduleWrapper = { every: every };
+      return wrapper;
+    }
+    if (daysOfWeek == null && repeatMonths == null && repeatDays == null) {
+      // one-shot at a specific date (forward: interval with year set)
+      const at: ScheduleAt = { date: iso, repeating: false, allowWhileIdle: false };
+      const wrapper: ScheduleWrapper = { at: at };
+      return wrapper;
+    }
+    // Any other repeat shape has no exact guest-API equivalent — report it as
+    // a repeating schedule anchored at the reminder datetime.
+    const at: ScheduleAt = { date: iso, repeating: true, allowWhileIdle: false };
+    const wrapper: ScheduleWrapper = { at: at };
+    return wrapper;
   }
 
   // ─── removeActive ───

@@ -11,6 +11,7 @@ There are no standards/requirements for vibration support on Android, so the `fe
 | macOS    | x         |
 | Android  | ✓         |
 | iOS      | ✓         |
+| OpenHarmony | ✓      |
 
 ## Install
 

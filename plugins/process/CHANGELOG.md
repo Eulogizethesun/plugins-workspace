@@ -2,7 +2,7 @@
 
 ## \[Unreleased]
 
-- Added OpenHarmony (OHOS) backend for `relaunch()`. Dispatches `appRecovery.restartApp()` through the `ohos.process` bridge plugin (openharmony-ability), bypassing the tao event loop which does not reliably deliver `RequestExit` on OHOS. The process is hard-killed (no `onDestroy` callback).
+- Added OpenHarmony (OHOS) backend for `relaunch()`: restart is unified through `app.request_restart()` (tauri `RunEvent::Exit`), which relaunches the app via `AppControlExt::restartApp()` and `ApplicationContext.restartApp()` (API 12+; kills all app processes, `onDestroy` not fired). The `appRecovery` bridge module (openharmony-ability) was removed.
 
 ## \[2.3.1]
 

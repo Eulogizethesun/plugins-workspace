@@ -1,5 +1,9 @@
 # Changelog
 
+## \[Unreleased]
+
+- Added OpenHarmony (OHOS) folder picking (`pick_folder`/`pick_folders`) via `DocumentViewPicker` selectMode (MIXED on 2in1, FOLDER on non-2in1 devices API 26+).
+
 ## \[2.7.1]
 
 ### Dependencies
