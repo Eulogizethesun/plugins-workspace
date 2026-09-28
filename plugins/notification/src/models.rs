@@ -218,7 +218,12 @@ pub struct PendingNotification {
     id: i32,
     title: Option<String>,
     body: Option<String>,
-    schedule: Schedule,
+    // Optional on OHOS: entries recovered from the system reminder agent after
+    // a process restart may lose their schedule (one-shot countdown reminders
+    // only store a relative trigger time).
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schedule: Option<Schedule>,
 }
 
 impl PendingNotification {
@@ -234,8 +239,8 @@ impl PendingNotification {
         self.body.as_deref()
     }
 
-    pub fn schedule(&self) -> &Schedule {
-        &self.schedule
+    pub fn schedule(&self) -> Option<&Schedule> {
+        self.schedule.as_ref()
     }
 }
 

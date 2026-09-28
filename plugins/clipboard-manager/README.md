@@ -9,6 +9,7 @@ Read and write to the system clipboard.
 | macOS    | ✓         |
 | Android  | ✓         |
 | iOS      | ✓         |
+| OpenHarmony | ✓ (reads require a permission, see below) |
 
 ## Install
 
@@ -68,6 +69,55 @@ import {
 await writeText('Tauri is awesome!')
 assert(await readText(), 'Tauri is awesome!')
 ```
+
+## OpenHarmony (OHOS) Permissions
+
+On HarmonyOS the clipboard **read** APIs (`readText`, `readImage`) are governed
+by a pasteboard read permission since API 12; the **write** APIs (`writeText`,
+`writeImage`, `writeHtml`) and `clear` need no permission.
+
+### `ohos.permission.READ_PASTEBOARD`
+
+- **Level / grant mode:** restricted permission — `system_basic` level,
+  authorized per user (`user_grant`), available since API 11.
+- **`module.json5` declaration:** must be declared in the app's entry
+  `module.json5` with `reason` and `usedScene`:
+
+  ```json
+  {
+    "name": "ohos.permission.READ_PASTEBOARD",
+    "reason": "$string:reason_read_pasteboard",
+    "usedScene": {
+      "abilities": ["EntryAbility"],
+      "when": "inuse"
+    }
+  }
+  ```
+
+  Projects created with the tauri-cli open-harmony template already include
+  this declaration and the `reason_read_pasteboard` string resource; older
+  projects or custom `module.json5` files need to add them manually.
+
+- **Signing profile (ACL):** as a restricted permission it must also be
+  requested through AppGallery Connect and present in the signing profile's
+  ACL. Without the ACL entry the app fails to sign/install — a hard failure at
+  install time, not a runtime degradation. Apps on PC and 2-in-1 devices can
+  all apply for it (AGC review is expected to take about 3 working days; the
+  first runtime request is granted by default without a dialog, and the user
+  can only switch between allow/forbid in Settings). On other devices only
+  whitelist scenarios (bank card numbers, passwords, document editing,
+  system-level input methods, open-source frameworks) pass the review.
+
+- **When the permission is undeclared or denied:** the plugin degrades
+  gracefully instead of surfacing a permission error —
+  - `readText` resolves with an empty string `""`,
+  - `readImage` rejects with a "clipboard does not contain an image" error.
+
+  Both are indistinguishable from an actually empty clipboard.
+
+See the official
+[pasteboard read permission guidelines](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides/get-pastedata-permission-guidelines)
+for details.
 
 ## Contributing
 

@@ -18,6 +18,8 @@ interface DialogFilter {
    * **Note:** Mobile platforms have different APIs for filtering that may not support extensions.
    * iOS: Extensions are supported in the document picker, but not in the media picker.
    * Android: Extensions are not supported.
+   * HarmonyOS (OHOS): Extensions are ignored — the document picker is always
+   *   used without extension filtering.
    *
    * For these platforms, MIME types are the primary way to filter files, as opposed to extensions.
    * This means the string values here labeled as `extensions` may also be a MIME type.
@@ -60,7 +62,21 @@ interface OpenDialogOptions {
   defaultPath?: string
   /** Whether the dialog allows multiple selection or not. */
   multiple?: boolean
-  /** Whether the dialog is a directory selection or not. */
+  /**
+   * Whether the dialog is a directory selection or not.
+   *
+   * #### Platform-specific
+   *
+   * - **Android / iOS:** Not supported — the call rejects with
+   *   `Folder picker is not implemented on mobile`.
+   * - **HarmonyOS (OHOS):** Supported through the `DocumentViewPicker`
+   *   `selectMode`: `MIXED` on 2in1 devices (file URIs picked alongside
+   *   folders are dropped) and `FOLDER` on non-2in1 devices (requires
+   *   API 26+; older versions resolve as a cancelled dialog (null) — the
+   *   ArkTS-level error is swallowed by the bridge). `multiple` selection
+   *   is capped at 10 for files (the system limits phone folder selection
+   *   to a single folder).
+   */
   directory?: boolean
   /**
    * If `directory` is true, indicates that it will be read recursively later.

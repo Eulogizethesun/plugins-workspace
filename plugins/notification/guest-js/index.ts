@@ -44,6 +44,22 @@ interface Options {
   body?: string
   /**
    * Schedule this notification to fire on a later time or a fixed interval.
+   *
+   * #### Platform-specific
+   *
+   * - **HarmonyOS (OHOS):** Scheduled notifications are published as
+   *   `reminderAgentManager` system reminders, so they still fire when the
+   *   app is backgrounded or killed. Repeating `at` schedules repeat on the
+   *   scheduled day-of-month; `every` month/year schedules repeat on the
+   *   creation day (months without that day are skipped; a Feb-29 yearly
+   *   schedule fires only in leap years).
+   *   Schedules without a system-reminder equivalent reject instead of
+   *   scheduling (every hour/minute/second, every N units, twoWeeks, past
+   *   repeating dates, and interval rules mixing month/day with weekday).
+   *   Reminders are quota-managed: without the app's AGC agent-reminder
+   *   entitlement the schedule call rejects with error 1700002, and with
+   *   notifications disabled it rejects with 1700001. A one-shot `at` that
+   *   is already due fires immediately.
    */
   schedule?: Schedule
   /**
@@ -268,7 +284,12 @@ interface PendingNotification {
   id: number
   title?: string
   body?: string
-  schedule: Schedule
+  /**
+   * May be missing on HarmonyOS for entries recovered from system-proxied
+   * reminders after a process restart (one-shot countdown reminders cannot
+   * restore their original date).
+   */
+  schedule?: Schedule
 }
 
 interface ActiveNotification {
@@ -401,6 +422,14 @@ async function registerActionTypes(types: ActionType[]): Promise<void> {
 /**
  * Retrieves the list of pending notifications.
  *
+ * #### Platform-specific
+ *
+ * - **HarmonyOS (OHOS):** System-proxied reminders outlive the app process.
+ *   The list is reconciled with the system (`getAllValidReminders`), so
+ *   reminders that survived a process restart are still listed, while
+ *   one-shot reminders that already fired are pruned. Recovered entries may
+ *   omit `schedule`.
+ *
  * @example
  * ```typescript
  * import { pending } from '@tauri-apps/plugin-notification';
@@ -417,6 +446,13 @@ async function pending(): Promise<PendingNotification[]> {
 
 /**
  * Cancels the pending notifications with the given list of identifiers.
+ *
+ * #### Platform-specific
+ *
+ * - **HarmonyOS (OHOS):** System-proxied reminders outlive the app process.
+ *   Cancelling by id still works after a process restart (reconciled with the
+ *   system via `getAllValidReminders`); `cancelAll` always clears every
+ *   system-level reminder as well.
  *
  * @example
  * ```typescript

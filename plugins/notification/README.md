@@ -9,6 +9,7 @@ Send message notifications (brief auto-expiring OS window element) to your user.
 | macOS    | ✓         |
 | Android  | ✓         |
 | iOS      | ✓         |
+| OpenHarmony | ✓ (scheduled notifications need the AGC agent-reminder entitlement) |
 
 ## Install
 

@@ -1,5 +1,8 @@
 import picker from '@ohos.file.picker';
 import promptAction from '@ohos.promptAction';
+import deviceInfo from '@ohos.deviceInfo';
+import fs from '@ohos.file.fs';
+import fileUri from '@ohos.file.fileuri';
 import { Plugin, Invoke } from '@tauri/app';
 
 interface FileFilter {
@@ -9,6 +12,7 @@ interface FileFilter {
 
 interface OpenArgs {
   multiple?: boolean;
+  directory?: boolean;
   filters?: FileFilter[];
   defaultPath?: string;
   title?: string;
@@ -44,7 +48,8 @@ export class DialogPlugin extends Plugin {
     console.info('[DialogPlugin] showFilePicker args: ' + argsStr);
     const args: OpenArgs = JSON.parse(argsStr) as OpenArgs;
     const multiple = args.multiple ?? false;
-    this.showDocumentPicker(invoke, multiple);
+    const directory = args.directory ?? false;
+    this.showDocumentPicker(invoke, multiple, directory);
   }
 
   private handleSave(invoke: Invoke): void {
@@ -77,18 +82,59 @@ export class DialogPlugin extends Plugin {
     this.showMessageBox(invoke, title, message, buttons);
   }
 
-  private async showDocumentPicker(invoke: Invoke, multiple: boolean): Promise<void> {
+  private async showDocumentPicker(invoke: Invoke, multiple: boolean, directory: boolean): Promise<void> {
     try {
-      console.info('[DialogPlugin] showDocumentPicker multiple=' + multiple);
+      console.info('[DialogPlugin] showDocumentPicker multiple=' + multiple + ' directory=' + directory);
       const documentPicker = new picker.DocumentViewPicker();
       const options: picker.DocumentSelectOptions = {
         maxSelectNumber: multiple ? 10 : 1
       };
 
+      // Folder selection (Eulogizethesun/tauri#99): DocumentViewPicker has no
+      // dedicated folder mode — selectMode decides what can be picked.
+      // - 2in1 (PC): MIXED is the only mode that works there (files and
+      //   folders mixed; per official docs MIXED has no effect on other
+      //   devices).
+      // - Phone: FOLDER requires API 26+; older versions get an explicit
+      //   error instead of a silent empty result.
+      if (directory) {
+        if (deviceInfo.deviceType === '2in1') {
+          options.selectMode = picker.DocumentSelectMode.MIXED;
+        } else {
+          if (deviceInfo.sdkApiVersion < 26) {
+            console.error('[DialogPlugin] folder picking requires API 26+ on non-2in1 devices, current ' + deviceInfo.sdkApiVersion);
+            invoke.reject('Folder picking is not supported on this device (FOLDER selectMode requires API 26+, current ' + deviceInfo.sdkApiVersion + ')');
+            return;
+          }
+          options.selectMode = picker.DocumentSelectMode.FOLDER;
+        }
+      }
+
       const result = await documentPicker.select(options);
       console.info('[DialogPlugin] documentPicker result: ' + JSON.stringify(result));
       if (result && result.length > 0) {
-        invoke.resolve(JSON.stringify({ files: result }));
+        // MIXED mode on 2in1 lets the user select files alongside folders
+        // (Eulogizethesun/tauri#124): drop file URIs instead of returning
+        // them as picked folders. Idempotent for Phone's FOLDER mode, which
+        // cannot select files in the first place.
+        let selected: string[] = result;
+        if (directory) {
+          selected = [];
+          for (const uri of result) {
+            if (this.isDirectoryUri(uri)) {
+              selected.push(uri);
+            } else {
+              console.warn('[DialogPlugin] directory picker dropping non-directory URI: ' + uri);
+            }
+          }
+        }
+        if (selected.length > 0) {
+          invoke.resolve(JSON.stringify({ files: selected }));
+        } else {
+          // Mirror the cancel branch below: never resolve an empty files
+          // array — the Rust side unwraps the first element and would panic.
+          invoke.reject('File picker cancelled');
+        }
       } else {
         invoke.reject('File picker cancelled');
       }
@@ -96,6 +142,31 @@ export class DialogPlugin extends Plugin {
       const err = e as Error;
       console.error('[DialogPlugin] showDocumentPicker error: ' + err.message);
       invoke.reject('Document picker failed: ' + err.message);
+    }
+  }
+
+  // Checks whether a picker-returned URI points to a directory
+  // (Eulogizethesun/tauri#124).
+  // - API 22+: fs.statSync accepts URIs directly, so Stat.isDirectory()
+  //   decides.
+  // - API < 22: FileUri.getFullDirectoryUri() (since 11) returns the
+  //   containing directory URI when the URI points to a file and the URI
+  //   itself unchanged when it points to a directory, so equality means the
+  //   URI is a directory.
+  // A failed check counts as a non-directory: the caller drops the entry
+  // rather than returning a file as a picked folder.
+  private isDirectoryUri(uri: string): boolean {
+    if (deviceInfo.sdkApiVersion >= 22) {
+      try {
+        return fs.statSync(uri).isDirectory();
+      } catch {
+        return false;
+      }
+    }
+    try {
+      return new fileUri.FileUri(uri).getFullDirectoryUri() === uri;
+    } catch {
+      return false;
     }
   }
 
