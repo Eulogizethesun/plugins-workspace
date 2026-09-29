@@ -17,6 +17,34 @@ const COMMANDS: &[&str] = &[
 ];
 
 fn main() {
+    // OHOS cross-compilation (host is not OHOS): require prebuilt libsodium
+    // via SODIUM_LIB_DIR — libsodium-sys-stable's ./configure cannot run on
+    // this host. On an OHOS PC (host == target) the automatic source build
+    // works without any setup (README "OHOS Build"). CARGO_CFG_TARGET_ENV
+    // reflects the TARGET triple; cfg!(target_env = "ohos") in build.rs
+    // reflects the HOST — combining them detects cross-compilation.
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("ohos")
+        && !cfg!(target_env = "ohos")
+    {
+        println!("cargo:rerun-if-env-changed=SODIUM_LIB_DIR");
+        match std::env::var("SODIUM_LIB_DIR") {
+            Ok(dir) => {
+                println!("cargo:warning=[stronghold] OHOS: using prebuilt libsodium from {dir}");
+            }
+            Err(_) => {
+                panic!(
+                    "OHOS target requires SODIUM_LIB_DIR to be set. \
+                     libsodium-sys-stable's build.rs runs in a separate process and cannot \
+                     read env vars set here; without SODIUM_LIB_DIR it will invoke ./configure \
+                     and fail with os error 193. \
+                     Obtain a prebuilt aarch64-unknown-linux-ohos libsodium (from the OHOS PC \
+                     Conan registry / cmd-pkgs, or built once with the OHOS NDK clang) and \
+                     point SODIUM_LIB_DIR at its lib directory. See README.md OHOS Build."
+                );
+            }
+        }
+    }
+
     tauri_plugin::Builder::new(COMMANDS)
         .global_api_script_path("./api-iife.js")
         .build();
