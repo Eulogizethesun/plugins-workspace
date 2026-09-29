@@ -17,10 +17,15 @@ const COMMANDS: &[&str] = &[
 ];
 
 fn main() {
-    // OHOS: require prebuilt libsodium via SODIUM_LIB_DIR.
-    // CARGO_CFG_TARGET_ENV reflects the TARGET triple (cross-compilation safe).
-    // Do NOT use cfg!(target_env = "ohos") — build.rs runs on HOST.
-    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("ohos") {
+    // OHOS cross-compilation (host is not OHOS): require prebuilt libsodium
+    // via SODIUM_LIB_DIR — libsodium-sys-stable's ./configure cannot run on
+    // this host. On an OHOS PC (host == target) the automatic source build
+    // works without any setup (README "OHOS Build"). CARGO_CFG_TARGET_ENV
+    // reflects the TARGET triple; cfg!(target_env = "ohos") in build.rs
+    // reflects the HOST — combining them detects cross-compilation.
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("ohos")
+        && !cfg!(target_env = "ohos")
+    {
         println!("cargo:rerun-if-env-changed=SODIUM_LIB_DIR");
         match std::env::var("SODIUM_LIB_DIR") {
             Ok(dir) => {

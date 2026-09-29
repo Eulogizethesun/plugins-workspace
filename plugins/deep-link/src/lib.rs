@@ -325,6 +325,18 @@ mod imp {
 
                 let label = window.label();
                 let window_id = window_id_for_label(label);
+                // Primary window (id 0 — including labels that never spawned
+                // a UIAbility and resolve to 0 per D9): delegate to the
+                // app-level get_current() so the primary keeps its
+                // pre-per-window semantics. Its shared `current` is refreshed
+                // by the RunEvent::Opened handler on warm re-entry (tao
+                // onNewWant → Event::Opened → lib.rs on_event), so reading
+                // only the per-window memo below would keep returning the
+                // cold-start URI forever (G16). The D9 cross-talk concern
+                // only applies to spawned windows reading the primary's link.
+                if window_id == 0 {
+                    return self.get_current();
+                }
                 // Lazy take: first call reads this instance's cold-start want.uri
                 // (stored by its onAbilityCreateWithWant with its window id).
                 let initial = if let Ok(guard) = tauri::ohos::APP.lock() {
@@ -359,11 +371,13 @@ mod imp {
                         );
                     }
                 }
-                // Per-window fallback (D9): never the shared `current` — on OHOS
-                // it only ever holds the primary's link (no OHOS producer emits
-                // RunEvent::Opened), so a spawned window reading it would
-                // surface the primary's URI (P3-3 cross-talk). Repeat calls for
-                // this window return its own memoized lazy-take instead.
+                // Spawned-window fallback (D9): never the shared `current` —
+                // on OHOS it only ever holds the primary's link (warm re-entry
+                // via RunEvent::Opened), so a spawned window reading it would
+                // surface the primary's URI (P3-3 cross-talk). Repeat calls
+                // for this window return its own memoized lazy-take instead.
+                // The primary (id 0) never reaches here — it returns via
+                // get_current() above.
                 return Ok(self
                     .ohos_window_current
                     .lock()
