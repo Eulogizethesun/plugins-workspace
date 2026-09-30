@@ -219,10 +219,10 @@ mod imp {
         /// OpenHarmony per-window deep-link memo (openspec multi-uiability-windows
         /// design.md D9): cold-start lazy-takes keyed by the calling window's
         /// UIAbility id, so a spawned window never surfaces the primary's link.
-        /// The shared `current` stays primary-scoped on OHOS — its only live
-        /// writer there is this same lazy-take path (no OHOS producer emits
-        /// RunEvent::Opened), so falling back to it from another window would
-        /// cross-talk (P3-3).
+        /// The shared `current` stays primary-scoped on OHOS — its live writers
+        /// there are this same lazy-take path and the warm-reentry
+        /// `RunEvent::Opened` handler — so falling back to it from another
+        /// window would cross-talk (P3-3).
         #[cfg(target_env = "ohos")]
         pub(crate) ohos_window_current:
             Mutex<std::collections::HashMap<i64, Vec<url::Url>>>,
@@ -365,9 +365,16 @@ mod imp {
                             .insert(window_id, urls.clone());
                         return Ok(Some(urls));
                     } else {
+                        // Redaction policy (see the lazy-take debug above): the
+                        // URI can embed tokens, so warn stays for observability
+                        // but carries only the payload length — the full URI
+                        // remains at debug level.
+                        tracing::debug!(
+                            "[deep-link] failed to parse initial want uri (window {window_id}): {initial:?}"
+                        );
                         tracing::warn!(
-                            "[deep-link] failed to parse initial want uri: {}",
-                            initial
+                            "[deep-link] failed to parse initial want uri ({} chars)",
+                            initial.len()
                         );
                     }
                 }

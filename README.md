@@ -41,6 +41,10 @@ This repo and all plugins require a Rust version of at least **1.77.2**
 - ❌: Not supported
 - `?` : Unknown/Untested or Planned
 
+## Cargo Registry Mirror (OpenHarmony)
+
+The workspace `.cargo/config.toml` replaces crates.io with the OpenHarmony artifactory mirror (`crates.repo.openharmony.cn`), so the first build of this workspace requires that mirror to be reachable. To build against crates.io instead, delete the `[source.crates-io]` / `[source.ohos-mirror]` replacement in `.cargo/config.toml` — see that file's header comment for why the replacement exists and when it can be removed.
+
 ## Contributing
 
 PRs accepted. Please make sure to read the [Contributing Guide](https://github.com/tauri-apps/tauri/blob/dev/.github/CONTRIBUTING.md) before making a pull request.
