@@ -297,7 +297,14 @@ mod imp {
                             current.replace(vec![url]);
                         }
                     } else {
-                        tracing::warn!("failed to parse initial want uri: {}", initial);
+                        // Redaction policy (same as get_current_for_window
+                        // below): the URI can embed tokens, so warn stays for
+                        // observability but carries only the payload length —
+                        // the full URI was already logged at debug above.
+                        tracing::warn!(
+                            "failed to parse initial want uri ({} chars)",
+                            initial.len()
+                        );
                     }
                 }
             }
