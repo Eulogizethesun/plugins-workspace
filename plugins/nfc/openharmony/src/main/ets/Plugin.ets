@@ -56,10 +56,14 @@ interface NfcTagRecordResponse {
   payload: number[];
 }
 
-// Flat scan response — the Android/iOS/guest-js contract. NOTE: the Rust
-// ScanResponse model nests this under `tag` (upstream cross-platform bug that
-// breaks the Rust-side Nfc::scan()); the JS invoke path resolves the ArkTS
-// JSON verbatim, so the flat shape is what guest-js receives on every platform.
+// Flat scan response — the guest-js declared contract. NOTE on `kind` parity:
+// this build resolves technologies to their techName strings (string[] is the
+// guest-js declared type), but Android actually sends `kind` as a numeric
+// array (NfcPlugin.kt builds it from the tag's techList integers) — the
+// upstream deviation is Android's, not this port's. The Rust ScanResponse
+// model also nests this under `tag` (upstream cross-platform bug that breaks
+// the Rust-side Nfc::scan()); the JS invoke path resolves the ArkTS JSON
+// verbatim, so the flat shape is what guest-js receives on every platform.
 interface ScanResponse {
   id: number[];
   kind: string[];
@@ -92,7 +96,11 @@ const JS_TECH_TO_OHOS: number[] = [
 // Tag discovery uses NFC foreground reader mode (tag.on('readerMode'), API
 // 11+): the system dispatches TagInfo to the registered callback while the
 // ability is in the foreground — no module.json5 skills or Ability intent
-// wiring needed, only the ohos.permission.NFC_TAG permission. scan/write keep
+// wiring needed. The required ohos.permission.NFC_TAG (normal,
+// system-granted) is declared in this HAR's module.json5; OHOS grants are
+// App-level, so it applies across the consuming app with no entry-side
+// re-declaration needed (notification's PUBLISH_AGENT_REMINDER is the
+// in-repo precedent). scan/write keep
 // their invoke pending until a tag is discovered (Android Session pattern);
 // a keepSessionAlive scan (or a scan-then-write) stores the tag so a later
 // write() without `kind` targets it directly.
@@ -219,6 +227,12 @@ export class NfcPlugin extends Plugin {
     if (args.kind != null && args.kind.ndef != null && args.kind.ndef.techLists != null) {
       techLists = args.kind.ndef.techLists;
     }
+    if (!this.techListsCanEverMatch(techLists)) {
+      invoke.reject(
+        'techLists can never match a discoverable tag: NfcBarcode tags have no readerMode discovery support, empty tech lists never match, and out-of-range tech indices never match'
+      );
+      return;
+    }
     this.scanTechLists = techLists;
     this.pendingScanInvoke = invoke;
 
@@ -329,6 +343,12 @@ export class NfcPlugin extends Plugin {
       if (args.kind.ndef != null && args.kind.ndef.techLists != null) {
         techLists = args.kind.ndef.techLists;
       }
+      if (!this.techListsCanEverMatch(techLists)) {
+        invoke.reject(
+          'techLists can never match a discoverable tag: NfcBarcode tags have no readerMode discovery support, empty tech lists never match, and out-of-range tech indices never match'
+        );
+        return;
+      }
       this.scanTechLists = techLists;
 
       const error: string | null = this.registerReaderMode();
@@ -407,6 +427,14 @@ export class NfcPlugin extends Plugin {
         moduleName: context.abilityInfo.moduleName,
         abilityName: context.abilityInfo.name
       };
+      // readerMode discovery supports only the four RF technologies — there
+      // is no discTech value for anything else. Application-level techs
+      // (Ndef/IsoDep/Mifare...) ride those carriers on the dispatched
+      // TagInfo, but NfcBarcode (Kovio) has no carrier at all, so a barcode
+      // tag is never dispatched to the callback. handleScan/handleWrite
+      // therefore reject Barcode-only techLists up front
+      // (techListsCanEverMatch) instead of letting those requests pend
+      // forever.
       const discTech: number[] = [tag.NFC_A, tag.NFC_B, tag.NFC_F, tag.NFC_V];
       tag.on('readerMode', elementName, discTech, this.readerModeCallback);
       this.cachedElementName = elementName;
@@ -490,6 +518,30 @@ export class NfcPlugin extends Plugin {
       // Tag is not NDEF-formatable
       return null;
     }
+  }
+
+  // Whether a techLists filter could ever match a discovered tag — checked
+  // before arming a scan/write session. A tech-list matches when the tag
+  // supports ALL of its entries (matchesTechLists below), so a list can never
+  // match when it is empty (skipped there) or when none of its entries can
+  // appear on a dispatched tag: NfcBarcode has no readerMode discovery
+  // carrier (see registerReaderMode), and out-of-range indices read as
+  // non-matching in matchesTechLists. If NO list can ever match, the session
+  // would hold its invoke pending forever — reject up front instead.
+  private techListsCanEverMatch(techLists: number[][] | null): boolean {
+    if (techLists == null || techLists.length === 0) {
+      return true;
+    }
+    for (const list of techLists) {
+      const matchable: boolean = list.some((tech: number): boolean => {
+        // 7 = guest-js TechKind.NfcBarcode — no discovery carrier
+        return tech >= 0 && tech < JS_TECH_TO_OHOS.length && tech !== 7;
+      });
+      if (matchable) {
+        return true;
+      }
+    }
+    return false;
   }
 
   // techLists post-filter: a tag matches if it supports ALL technologies of

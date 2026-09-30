@@ -123,7 +123,7 @@ Under `tauri.conf.json > plugins > deep-link`, configure the domains (mobile) an
 
 ### OpenHarmony
 
-On OpenHarmony, the `mobile` domains are used to generate `module.json5` `skills/uris` declarations at build time (static scheme registration via `ohos.want.action.viewData` + `entity.system.browsable`). Runtime `register`/`unregister` are no-op (scheme registration is build-time only). `getCurrent` returns the first-launch URL from `onCreate` `want.uri`; `onOpenUrl` fires on `onNewWant` (app already running).
+On OpenHarmony, the `mobile` domains are used to generate `module.json5` `skills/uris` declarations at build time (static scheme registration via `ohos.want.action.viewData` + `entity.system.browsable`). Runtime `register`/`unregister`/`isRegistered` return an error — schemes are statically declared in `module.json5` and cannot change at runtime. `getCurrent` returns the calling window's first-launch URL from `onCreate` `want.uri` (each spawned window surfaces its own cold-start URI); `onOpenUrl` fires on `onNewWant` (app already running).
 
 ## Usage
 

@@ -161,6 +161,19 @@ mod imp {
                 .map_err(Into::into)
         }
 
+        /// Per-window variant of [`Self::get_current`], which the `getCurrent`
+        /// command routes through (OpenHarmony resolves each window's
+        /// UIAbility instance for its own deep link). Android has no
+        /// multi-instance semantics, so this delegates to the app-level
+        /// [`Self::get_current`] — behavior is identical to before the
+        /// command gained the per-window route.
+        pub fn get_current_for_window(
+            &self,
+            _window: &tauri::Window<R>,
+        ) -> crate::Result<Option<Vec<url::Url>>> {
+            self.get_current()
+        }
+
         /// Register the app as the default handler for the specified protocol.
         ///
         /// - `protocol`: The name of the protocol without `://`. For example, if you want your app to handle `tauri://` links, call this method with `tauri` as the protocol.

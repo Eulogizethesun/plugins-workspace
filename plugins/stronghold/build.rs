@@ -32,14 +32,18 @@ fn main() {
                 println!("cargo:warning=[stronghold] OHOS: using prebuilt libsodium from {dir}");
             }
             Err(_) => {
+                let target = std::env::var("TARGET").unwrap_or_else(|_| "the OHOS target".to_string());
                 panic!(
-                    "OHOS target requires SODIUM_LIB_DIR to be set. \
-                     libsodium-sys-stable's build.rs runs in a separate process and cannot \
-                     read env vars set here; without SODIUM_LIB_DIR it will invoke ./configure \
-                     and fail with os error 193. \
-                     Obtain a prebuilt aarch64-unknown-linux-ohos libsodium (from the OHOS PC \
-                     Conan registry / cmd-pkgs, or built once with the OHOS NDK clang) and \
-                     point SODIUM_LIB_DIR at its lib directory. See README.md OHOS Build."
+                    "cross-compiling to OHOS requires SODIUM_LIB_DIR to be set. \
+                     libsodium-sys-stable's build script invokes ./configure, which cannot \
+                     produce {target} artifacts on this host (on a Windows host it fails \
+                     outright with os error 193; on a Unix host it builds for the host \
+                     architecture instead). Its build script runs in a separate process \
+                     and cannot read env vars set here, so the variable must be set in \
+                     the environment invoking cargo. Obtain a prebuilt libsodium for \
+                     {target} (from the OHOS PC Conan registry / cmd-pkgs, or built once \
+                     with the OHOS NDK clang) and point SODIUM_LIB_DIR at its lib \
+                     directory. See README.md OHOS Build."
                 );
             }
         }
