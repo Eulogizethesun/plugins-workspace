@@ -302,7 +302,7 @@ mod imp {
                         // observability but carries only the payload length —
                         // the full URI was already logged at debug above.
                         tracing::warn!(
-                            "failed to parse initial want uri ({} chars)",
+                            "failed to parse initial want uri ({} bytes)",
                             initial.len()
                         );
                     }
@@ -375,12 +375,9 @@ mod imp {
                         // Redaction policy (see the lazy-take debug above): the
                         // URI can embed tokens, so warn stays for observability
                         // but carries only the payload length — the full URI
-                        // remains at debug level.
-                        tracing::debug!(
-                            "[deep-link] failed to parse initial want uri (window {window_id}): {initial:?}"
-                        );
+                        // was already logged at debug above.
                         tracing::warn!(
-                            "[deep-link] failed to parse initial want uri ({} chars)",
+                            "[deep-link] failed to parse initial want uri ({} bytes)",
                             initial.len()
                         );
                     }
