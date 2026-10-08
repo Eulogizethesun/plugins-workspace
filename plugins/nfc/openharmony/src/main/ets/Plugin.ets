@@ -336,9 +336,17 @@ export class NfcPlugin extends Plugin {
     }
 
     if (args.kind != null) {
-      // Scan-then-write: arm a pending write session until a tag is discovered
-      this.pendingWriteInvoke = invoke;
-      this.pendingWriteMessage = message;
+      // Scan-then-write: arm a pending write session until a tag is
+      // discovered. Validate BEFORE arming any session state (mirrors
+      // handleScan's order): a rejected request must leave zero residue.
+      // With the guard after the arming assignments, a rejected write left
+      // pendingWriteInvoke/pendingWriteMessage set with scanTechLists unset —
+      // (a) the pending check above then rejected every later legitimate
+      // write() with a misleading 'connected tag not found' error until a
+      // scan() re-armed the session, and (b) updateRegistration (hasSession)
+      // saw the stale pendingWriteInvoke, so the next foreground switch
+      // registered an unfiltered readerMode whose callback physically wrote
+      // this rejected request's NDEF message to ANY discovered tag.
       let techLists: number[][] | null = null;
       if (args.kind.ndef != null && args.kind.ndef.techLists != null) {
         techLists = args.kind.ndef.techLists;
@@ -349,6 +357,8 @@ export class NfcPlugin extends Plugin {
         );
         return;
       }
+      this.pendingWriteInvoke = invoke;
+      this.pendingWriteMessage = message;
       this.scanTechLists = techLists;
 
       const error: string | null = this.registerReaderMode();
@@ -523,17 +533,21 @@ export class NfcPlugin extends Plugin {
   // Whether a techLists filter could ever match a discovered tag — checked
   // before arming a scan/write session. A tech-list matches when the tag
   // supports ALL of its entries (matchesTechLists below), so a list can never
-  // match when it is empty (skipped there) or when none of its entries can
-  // appear on a dispatched tag: NfcBarcode has no readerMode discovery
+  // match when it is empty (skipped there) or when ANY of its entries can
+  // never appear on a dispatched tag: NfcBarcode has no readerMode discovery
   // carrier (see registerReaderMode), and out-of-range indices read as
-  // non-matching in matchesTechLists. If NO list can ever match, the session
-  // would hold its invoke pending forever — reject up front instead.
+  // non-matching in matchesTechLists. `every` (not `some`) is load-bearing
+  // here: a mixed list like [NfcA, NfcBarcode] passes a `some` check (NfcA
+  // is matchable) yet can never match — AND-within-list also demands the
+  // barcode — and would hold the session pending forever. If NO list can
+  // ever match, the session would hold its invoke pending forever — reject
+  // up front instead.
   private techListsCanEverMatch(techLists: number[][] | null): boolean {
     if (techLists == null || techLists.length === 0) {
       return true;
     }
     for (const list of techLists) {
-      const matchable: boolean = list.some((tech: number): boolean => {
+      const matchable: boolean = list.length > 0 && list.every((tech: number): boolean => {
         // 7 = guest-js TechKind.NfcBarcode — no discovery carrier
         return tech >= 0 && tech < JS_TECH_TO_OHOS.length && tech !== 7;
       });
