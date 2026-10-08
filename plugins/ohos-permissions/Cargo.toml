@@ -1,0 +1,29 @@
+[package]
+name = "tauri-plugin-ohos-permissions"
+version = "0.1.0"
+description = "Check and request OHOS system permissions (Camera, Microphone, etc.) in Tauri applications."
+edition = { workspace = true }
+authors = { workspace = true }
+license = { workspace = true }
+rust-version = { workspace = true }
+repository = { workspace = true }
+links = "tauri-plugin-ohos-permissions"
+
+[package.metadata.docs.rs]
+targets = ["aarch64-unknown-linux-ohos"]
+
+[package.metadata.platforms.support]
+windows = { level = "none", notes = "Stub only — all checks return true." }
+linux = { level = "none", notes = "Stub only — all checks return true." }
+macos = { level = "none", notes = "Stub only — all checks return true. Use tauri-plugin-macos-permissions instead." }
+android = { level = "none", notes = "Not implemented." }
+ios = { level = "none", notes = "Not implemented." }
+ohos = { level = "partial", notes = "Camera and Microphone via abilityAccessCtrl. Accessibility/ScreenRecording/InputMonitoring in Phase 2." }
+
+[build-dependencies]
+tauri-plugin = { workspace = true, features = ["build"] }
+
+[dependencies]
+tauri = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
