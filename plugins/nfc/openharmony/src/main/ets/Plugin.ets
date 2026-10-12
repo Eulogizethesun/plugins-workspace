@@ -144,7 +144,9 @@ export class NfcPlugin extends Plugin {
       this.scanTechLists = null;
       this.storedTagInfo = keepAlive ? tagInfo : null;
       this.resolveScan(scanInvoke, tagInfo);
-      this.updateRegistration();
+      // force=false: the registration just proved itself alive by delivering
+      // this callback, so the readerModeActive fast path is the correct check.
+      this.updateRegistration(false);
       return;
     }
 
@@ -177,8 +179,10 @@ export class NfcPlugin extends Plugin {
 
   // Re-register reader mode when returning to the foreground if a session is
   // still active (Android parity: onResume re-enables foreground dispatch).
+  // force=true: at the foreground boundary the registration's system-side
+  // validity is unknown — see updateRegistration.
   onForeground(): void {
-    this.updateRegistration();
+    this.updateRegistration(true);
   }
 
   // ─── isAvailable ───
@@ -484,10 +488,24 @@ export class NfcPlugin extends Plugin {
     }
   }
 
-  private updateRegistration(): void {
+  private updateRegistration(force: boolean): void {
     const hasSession: boolean =
       this.pendingScanInvoke != null || this.pendingWriteInvoke != null || this.storedTagInfo != null;
     if (hasSession) {
+      if (force) {
+        // Foreground boundary only: the system manages the readerMode
+        // registration per foreground session (official lifecycle: register
+        // in onForeground, off before leaving the foreground / destroying the
+        // page). If the system dropped the registration while we were
+        // backgrounded, our readerModeActive flag still claims armed, so a
+        // plain registerReaderMode() short-circuits on it and the
+        // registration can never be rebuilt — an armed scan()/write() would
+        // stay pending forever, with no error and no timeout. Force the full
+        // off/on cycle instead: when the registration did survive, this is
+        // exactly the off/on pairing the official lifecycle prescribes; when
+        // it was dropped, this restores it.
+        this.unregisterReaderMode();
+      }
       const error: string | null = this.registerReaderMode();
       if (error != null) {
         console.warn('[NfcPlugin] foreground re-registration failed: ' + error);

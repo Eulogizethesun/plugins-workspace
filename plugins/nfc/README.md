@@ -83,6 +83,14 @@ declaration. Platform differences to keep in mind:
   `NfcA`), while Android sends fully-qualified class names (e.g.
   `android.nfc.tech.NfcA`) — `kind` values are not directly comparable across
   platforms.
+- Registration lifecycle: the system manages the readerMode registration per
+  foreground session (official guidance pairs `tag.on('readerMode')` in
+  `onForeground` with `tag.off` before leaving the foreground). The plugin has
+  no `onBackground` hook, so it re-establishes the registration with a full
+  off/on cycle whenever the app returns to the foreground with a session
+  still armed — but an armed `scan()`/`write()` has no timeout and no cancel
+  command: if the app is killed while armed, the JS promise dies with the
+  process. Don't arm sessions across expected backgrounding.
 
 The Rust-side API (`Nfc::scan()`/`Nfc::write()`) is currently not usable on
 OpenHarmony — see the `openharmony` entry in the crate's
