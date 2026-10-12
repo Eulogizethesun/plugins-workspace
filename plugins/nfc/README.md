@@ -1,6 +1,6 @@
 ![NFC](https://github.com/tauri-apps/plugins-workspace/raw/v2/plugins/nfc/banner.png)
 
-Read and write NFC tags on Android and iOS.
+Read and write NFC tags on Android, iOS and OpenHarmony.
 
 | Platform | Supported |
 | -------- | --------- |
@@ -9,6 +9,7 @@ Read and write NFC tags on Android and iOS.
 | macOS    | x         |
 | Android  | ✓         |
 | iOS      | ✓         |
+| OpenHarmony | ✓ (partial, see below) |
 
 ## Install
 
@@ -65,6 +66,28 @@ import { scan, textRecord, write } from '@tauri-apps/plugin-nfc'
 await scan({ type: 'tag', keepSessionAlive: true })
 await write([textRecord('Tauri is awesome!')])
 ```
+
+### OpenHarmony
+
+`scan`/`write` (NDEF) are implemented through the NFC foreground reader mode
+(`tag.on('readerMode')`, API 11+): the invoke stays pending until a tag is
+tapped, mirroring the Android `Session` semantics. The required
+`ohos.permission.NFC_TAG` (normal, system-granted) is declared by the plugin's
+OpenHarmony HAR module and granted App-wide, so consuming apps need no extra
+declaration. Platform differences to keep in mind:
+
+- `mimeType`/`uri` scan filters have no readerMode equivalent and are silently
+  ignored (discovery is RF-technology based; `techLists` are applied as a
+  post-filter).
+- The `kind` array in scan results holds OHOS short technology names (e.g.
+  `NfcA`), while Android sends fully-qualified class names (e.g.
+  `android.nfc.tech.NfcA`) — `kind` values are not directly comparable across
+  platforms.
+
+The Rust-side API (`Nfc::scan()`/`Nfc::write()`) is currently not usable on
+OpenHarmony — see the `openharmony` entry in the crate's
+`[package.metadata.platforms.support]` notes — so use the JavaScript plugin
+API.
 
 ## Contributing
 

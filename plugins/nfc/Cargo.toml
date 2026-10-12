@@ -17,7 +17,7 @@ linux = { level = "none", notes = "" }
 macos = { level = "none", notes = "" }
 android = { level = "full", notes = "" }
 ios = { level = "full", notes = "" }
-openharmony = { level = "partial", notes = "is_available/scan/write via NFC readerMode foreground dispatch (Android Session semantics); the required `ohos.permission.NFC_TAG` (normal, system-granted) is declared by the plugin's OpenHarmony HAR module and granted App-wide, so consuming apps need no extra declaration; mimeType/uri scan filters have no platform equivalent and are ignored; Rust-side Nfc::scan()/write() hit an upstream models deserialization bug — use the JS plugin API on all platforms" }
+openharmony = { level = "partial", notes = "is_available/scan/write via NFC readerMode foreground dispatch (Android Session semantics); the required `ohos.permission.NFC_TAG` (normal, system-granted) is declared by the plugin's OpenHarmony HAR module and granted App-wide, so consuming apps need no extra declaration; mimeType/uri scan filters have no platform equivalent and are ignored; the Rust-side API is not usable today — Nfc::write() is blocked by a kind contract mismatch (Rust's WriteRequest carries no `kind` field, and the ArkTS side only accepts kind-less writes against a tag stored by a prior keepSessionAlive scan) while Nfc::scan() is blocked by the Rust ScanResponse model (tag-nested, scalar id/kind) not matching the flat response the plugin returns — use the JS plugin API on all platforms" }
 
 [build-dependencies]
 tauri-plugin = { workspace = true, features = ["build"] }

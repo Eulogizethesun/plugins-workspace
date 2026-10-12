@@ -205,11 +205,14 @@ fork at <https://gitcode.com/dragonswordy/stronghold.rs>.
   recommended work factor 19 (≈2^19 iterations). Measured on an aarch64
   HarmonyOS PC (debug build) this costs ≈107 s per call; release builds are
   expected to be in the ~1 s range per upstream's design. The cost is
-  password hardening by design, not an OHOS regression. The full plugin chain
-  (key provider, BIP39/SLIP-10/Ed25519
+  password hardening by design, not an OHOS regression. The underlying
+  stronghold chain (key provider, BIP39/SLIP-10/Ed25519
   procedures, vault + store, snapshot round-trip, wrong-password rejection) is
   verified end-to-end on an aarch64 HarmonyOS PC by
-  `tests/ohos_e2e.rs`.
+  `tests/ohos_e2e.rs`. Note the test's scope: it drives the `iota_stronghold`
+  API surface directly plus the plugin's wrapper layer (`kdf::KeyDerivation`,
+  `stronghold::Stronghold`); the tauri command layer and the AppData
+  snapshot-path resolution are not covered by it.
 
 ## Contributing
 

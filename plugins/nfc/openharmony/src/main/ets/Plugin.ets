@@ -57,10 +57,12 @@ interface NfcTagRecordResponse {
 }
 
 // Flat scan response — the guest-js declared contract. NOTE on `kind` parity:
-// this build resolves technologies to their techName strings (string[] is the
-// guest-js declared type), but Android actually sends `kind` as a numeric
-// array (NfcPlugin.kt builds it from the tag's techList integers) — the
-// upstream deviation is Android's, not this port's. The Rust ScanResponse
+// both platforms send string[] (the guest-js declared type), but the values
+// differ in granularity: this build resolves technologies to their OHOS
+// techName() short names (e.g. "NfcA"), while Android fills the array from
+// Tag.getTechList() — fully-qualified class names like "android.nfc.tech.NfcA"
+// (see readTagInner in NfcPlugin.kt) — so `kind` values are not directly
+// comparable across platforms. The Rust ScanResponse
 // model also nests this under `tag` (upstream cross-platform bug that breaks
 // the Rust-side Nfc::scan()); the JS invoke path resolves the ArkTS JSON
 // verbatim, so the flat shape is what guest-js receives on every platform.
