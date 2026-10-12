@@ -218,6 +218,22 @@ export class NfcPlugin extends Plugin {
       return;
     }
 
+    let techLists: number[][] | null = null;
+    if (args.kind != null && args.kind.ndef != null && args.kind.ndef.techLists != null) {
+      techLists = args.kind.ndef.techLists;
+    }
+    // Validate BEFORE cancelling any prior session (same order handleWrite
+    // established): a rejected request must leave zero residue — with the
+    // guard after the failPending block, an invalid techLists argument
+    // rejected the dangling scan/write promises of a legitimate session and
+    // cleared its stored tag while arming nothing in return.
+    if (!this.techListsCanEverMatch(techLists)) {
+      invoke.reject(
+        'techLists can never match a discoverable tag: NfcBarcode tags have no readerMode discovery support, empty tech lists never match, and out-of-range tech indices never match'
+      );
+      return;
+    }
+
     // Replace any prior session (Android overwrites it silently; we reject
     // the dangling invokes so no JS promise is left unsettled).
     this.failPendingScan('Scan cancelled by a new scan request');
@@ -225,16 +241,6 @@ export class NfcPlugin extends Plugin {
     this.storedTagInfo = null;
 
     this.scanKeepAlive = args.keepSessionAlive === true;
-    let techLists: number[][] | null = null;
-    if (args.kind != null && args.kind.ndef != null && args.kind.ndef.techLists != null) {
-      techLists = args.kind.ndef.techLists;
-    }
-    if (!this.techListsCanEverMatch(techLists)) {
-      invoke.reject(
-        'techLists can never match a discoverable tag: NfcBarcode tags have no readerMode discovery support, empty tech lists never match, and out-of-range tech indices never match'
-      );
-      return;
-    }
     this.scanTechLists = techLists;
     this.pendingScanInvoke = invoke;
 
@@ -511,6 +517,10 @@ export class NfcPlugin extends Plugin {
     }
     this.pendingWriteInvoke = null;
     this.pendingWriteMessage = null;
+    // The write's scan filter dies with it (failPendingScan clears its own) —
+    // otherwise a stale scanTechLists keeps filtering readerMode callbacks
+    // through the no-session gap.
+    this.scanTechLists = null;
     invoke.reject(reason);
   }
 
