@@ -142,7 +142,9 @@ fn lock_shortcuts<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 /// Unified version gate for OHOS global shortcuts: `inputConsumer.on('hotkeyChange')`
 /// is API 14+. Every register/unregister/query entry point checks this up front so
-/// the caller gets an error naming the required API level instead of a silent no-op.
+/// the JS side sees the clean message (the facade gates with the same message, but
+/// its `napi` error surfaces as "GenericFailure, ..." through the `to_string`
+/// round-trip on the caller side).
 #[cfg(target_env = "ohos")]
 fn ohos_require_hotkey_api(op: &str) -> Result<()> {
     use openharmony_ability_plugin_global_shortcut::version;
