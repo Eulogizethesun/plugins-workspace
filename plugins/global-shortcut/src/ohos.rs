@@ -248,10 +248,25 @@ fn with_ohos_app<R>(
 
 // ─── Fire-and-forget register/unregister ────────────────────────────────────
 
-/// Monotonic stamp source for registration generations; see
-/// `RegisteredShortcut::stamp` in lib.rs.
-pub(crate) fn next_registration_stamp() -> u64 {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+/// Monotonic operation sequence shared by every register / unregister /
+/// unregister-all dispatch; see `RegisteredShortcut::stamp` in lib.rs.
+///
+/// One counter serves two race fixes:
+/// - **Rust side**: the entry a register inserts is stamped, and the
+///   worker's removal on rejection is conditional on the stamp still
+///   matching, so a same-id re-registration is not undone by the stale
+///   worker of an earlier attempt.
+/// - **ArkTS side**: the stamp travels as the request's `generation`. The
+///   ArkTS plugin tracks the highest generation served (a global floor for
+///   unregister-all sweeps plus a per-id watermark) and rejects requests
+///   carrying an older one, so an in-flight register that arrives after a
+///   later unregister / unregister-all cannot resurrect a physical
+///   registration the Rust store no longer tracks (the ghost-hotkey race).
+/// `u32` matches the wire field; the counter would have to wrap 2^32
+/// operations inside the lifetime of one in-flight request for the guard
+/// to misfire, which cannot happen.
+pub(crate) fn next_registration_stamp() -> u32 {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
@@ -266,19 +281,26 @@ pub(crate) fn next_registration_stamp() -> u64 {
 /// registration — but only when the entry still carries this worker's stamp:
 /// if the same id was re-registered in between (replacing the entry with a
 /// newer stamp), the stale worker must not undo the newer registration.
+///
+/// The stamp doubles as the request's `generation`: when a newer-generation
+/// unregister / unregister-all has already been served on the ArkTS side,
+/// the request is rejected there (no physical registration happens) and this
+/// same Err path runs against the already-updated store — a no-op.
 pub(crate) fn spawn_register<R: Runtime>(
     client: GlobalShortcutClient,
     id: HotKeyId,
     modifiers: &[Modifiers],
     key: &str,
-    stamp: u64,
+    stamp: u32,
     shortcuts: Arc<Mutex<HashMap<HotKeyId, RegisteredShortcut<R>>>>,
 ) {
     let modifier_names = to_ohos_modifier_names(modifiers);
     let key = key.to_string();
     std::thread::spawn(move || {
         log::info!("[global-shortcut] register ENTER id={}", id);
-        if let Err(e) = futures_executor::block_on(client.register(id, &modifier_names, &key)) {
+        if let Err(e) =
+            futures_executor::block_on(client.register(id, &modifier_names, &key, stamp))
+        {
             log::error!("[global-shortcut] Failed to register shortcut {}: {:?}", id, e);
             let mut shortcuts = lock_shortcuts(&shortcuts);
             if shortcuts.get(&id).is_some_and(|entry| entry.stamp == stamp) {
@@ -290,9 +312,16 @@ pub(crate) fn spawn_register<R: Runtime>(
 
 /// Unregister a shortcut on a worker thread (fire-and-forget); failures are
 /// log-only by design.
-pub(crate) fn spawn_unregister(client: GlobalShortcutClient, id: HotKeyId) {
+///
+/// `generation` is a fresh stamp taken by the caller right after the
+/// local-map removal, outside the store lock — the atomic counter makes
+/// stamp order match call order, which is all the ArkTS-side guard needs.
+/// The ArkTS side raises the per-id watermark to it, so an in-flight
+/// register for this id dispatched earlier (smaller generation) is rejected
+/// on arrival instead of resurrecting the hotkey.
+pub(crate) fn spawn_unregister(client: GlobalShortcutClient, id: HotKeyId, generation: u32) {
     std::thread::spawn(move || {
-        if let Err(e) = futures_executor::block_on(client.unregister(id)) {
+        if let Err(e) = futures_executor::block_on(client.unregister(id, generation)) {
             log::error!("[global-shortcut] Failed to unregister shortcut {}: {:?}", id, e);
         }
     });
@@ -300,9 +329,19 @@ pub(crate) fn spawn_unregister(client: GlobalShortcutClient, id: HotKeyId) {
 
 /// Unregister all shortcuts on a worker thread (fire-and-forget); failures
 /// are log-only by design.
-pub(crate) fn spawn_unregister_all(client: GlobalShortcutClient) {
+///
+/// `generation` is a fresh stamp taken by the caller right after the
+/// `mem::take` of the local map, outside the store lock — the atomic
+/// counter makes stamp order match call order, which is all the
+/// ArkTS-side guard needs. The ArkTS side raises its global generation
+/// floor to it, so any in-flight register dispatched before this sweep
+/// (smaller generation) is rejected on arrival — the ghost-hotkey race
+/// fix: without it, a register worker completing after this sweep would
+/// leave a physical registration behind that the emptied local map
+/// cannot see, report, or clear.
+pub(crate) fn spawn_unregister_all(client: GlobalShortcutClient, generation: u32) {
     std::thread::spawn(move || {
-        if let Err(e) = futures_executor::block_on(client.unregister_all()) {
+        if let Err(e) = futures_executor::block_on(client.unregister_all(generation)) {
             log::error!("[global-shortcut] Failed to unregister all shortcuts: {:?}", e);
         }
     });

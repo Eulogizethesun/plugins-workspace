@@ -90,13 +90,14 @@ impl TryFrom<&str> for ShortcutWrapper {
 struct RegisteredShortcut<R: Runtime> {
     shortcut: Shortcut,
     handler: Option<Arc<HandlerFn<R>>>,
-    /// OHOS: monotonic registration stamp. The entry is inserted
-    /// synchronously and removed from a worker thread when ArkTS rejects the
-    /// request; the stamp makes that removal conditional so a same-id
-    /// re-registration that already replaced the entry is not undone by the
-    /// stale worker of the earlier attempt.
+    /// OHOS: monotonic registration stamp (doubles as the request's
+    /// `generation` on the ArkTS wire — see `ohos::next_registration_stamp`).
+    /// The entry is inserted synchronously and removed from a worker thread
+    /// when ArkTS rejects the request; the stamp makes that removal
+    /// conditional so a same-id re-registration that already replaced the
+    /// entry is not undone by the stale worker of the earlier attempt.
     #[cfg(target_env = "ohos")]
-    stamp: u64,
+    stamp: u32,
 }
 
 // ─── Platform-specific GlobalHotKeyManager ──────────────────────────────────
@@ -345,8 +346,16 @@ impl<R: Runtime> GlobalShortcut<R> {
 
         #[cfg(target_env = "ohos")]
         {
+            // The fresh stamp travels as the request's generation; the
+            // ArkTS side raises the per-id watermark to it, so an in-flight
+            // register for this id dispatched before this call is rejected
+            // on arrival instead of resurrecting the hotkey. Taken outside
+            // the store lock: the counter is atomic, so the ordering that
+            // matters (this stamp > every stamp of an earlier-issued
+            // register for this id) follows from call order alone.
             if let Some(ref client) = self.client {
-                ohos::spawn_unregister(client.clone(), shortcut.id());
+                let generation = ohos::next_registration_stamp();
+                ohos::spawn_unregister(client.clone(), shortcut.id(), generation);
             }
         }
 
@@ -379,9 +388,13 @@ impl<R: Runtime> GlobalShortcut<R> {
 
         #[cfg(target_env = "ohos")]
         {
+            // Fresh stamps → generations, same call-order argument as
+            // `unregister`: each per-id watermark keeps a stale in-flight
+            // register for that id from resurrecting it.
             if let Some(ref client) = self.client {
                 for s in &mapped_shortcuts {
-                    ohos::spawn_unregister(client.clone(), s.id());
+                    let generation = ohos::next_registration_stamp();
+                    ohos::spawn_unregister(client.clone(), s.id(), generation);
                 }
             }
         }
@@ -395,6 +408,14 @@ impl<R: Runtime> GlobalShortcut<R> {
     }
 
     /// Unregister all registered shortcuts.
+    ///
+    /// # OHOS note
+    /// The local store is cleared synchronously while the physical
+    /// `inputConsumer.off()` calls happen asynchronously on the ArkTS main
+    /// thread. The sweep carries a fresh generation and the ArkTS side
+    /// rejects any in-flight register predating it, so a register worker
+    /// completing after this sweep cannot resurrect a hotkey this call has
+    /// cleared — no ghost registrations.
     pub fn unregister_all(&self) -> Result<()> {
         #[cfg(target_env = "ohos")]
         ohos_require_hotkey_api("unregisterAll")?;
@@ -414,7 +435,13 @@ impl<R: Runtime> GlobalShortcut<R> {
         {
             let _ = &hotkeys; // suppress unused warning on OHOS
             if let Some(ref client) = self.client {
-                ohos::spawn_unregister_all(client.clone());
+                // Fresh stamp → the sweep's generation (same call-order
+                // argument as `unregister`: every register this sweep must
+                // cancel took its stamp before this call, so this one is
+                // larger). The ArkTS side raises its global generation
+                // floor to it.
+                let generation = ohos::next_registration_stamp();
+                ohos::spawn_unregister_all(client.clone(), generation);
             }
             Ok(())
         }
@@ -430,7 +457,11 @@ impl<R: Runtime> GlobalShortcut<R> {
     /// asynchronously on the ArkTS main thread. This function queries the local
     /// `shortcuts` map, so it may return `true` briefly before the ArkTS
     /// registration completes. If ArkTS rejects the registration, the entry is
-    /// removed again, so subsequent calls report `false`.
+    /// removed again, so subsequent calls report `false`. The reverse drift —
+    /// a physical registration the local map does not know about — is closed
+    /// by the generation guard on the ArkTS side: an unregister /
+    /// unregister-all that raced an in-flight register supersedes it, and the
+    /// stale register is rejected there instead of taking effect.
     pub fn is_registered<S: TryInto<ShortcutWrapper>>(&self, shortcut: S) -> bool
     where
         S::Error: std::error::Error,
@@ -611,7 +642,12 @@ impl<R: Runtime> Builder<R> {
                 is_registered,
             ])
             .setup(move |app, _api| {
+                // `mut` is desktop-only: the OHOS path just moves the store
+                // into `ohos_setup`.
+                #[cfg(not(target_env = "ohos"))]
                 let mut store = HashMap::<HotKeyId, RegisteredShortcut<R>>::new();
+                #[cfg(target_env = "ohos")]
+                let store = HashMap::<HotKeyId, RegisteredShortcut<R>>::new();
 
                 // ─── Desktop: use global-hotkey ──────────────────────────
                 #[cfg(not(target_env = "ohos"))]
