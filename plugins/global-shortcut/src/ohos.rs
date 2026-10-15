@@ -313,12 +313,14 @@ pub(crate) fn spawn_register<R: Runtime>(
 /// Unregister a shortcut on a worker thread (fire-and-forget); failures are
 /// log-only by design.
 ///
-/// `generation` is a fresh stamp taken by the caller right after the
+/// `generation` is a fresh stamp taken by the caller before the conditional
 /// local-map removal, outside the store lock — the atomic counter makes
 /// stamp order match call order, which is all the ArkTS-side guard needs.
 /// The ArkTS side raises the per-id watermark to it, so an in-flight
 /// register for this id dispatched earlier (smaller generation) is rejected
-/// on arrival instead of resurrecting the hotkey.
+/// on arrival instead of resurrecting the hotkey; a register dispatched
+/// later (larger generation) survives it, which is why the caller's local
+/// removal is conditional on the entry's stamp predating this generation.
 pub(crate) fn spawn_unregister(client: GlobalShortcutClient, id: HotKeyId, generation: u32) {
     std::thread::spawn(move || {
         if let Err(e) = futures_executor::block_on(client.unregister(id, generation)) {
@@ -330,15 +332,18 @@ pub(crate) fn spawn_unregister(client: GlobalShortcutClient, id: HotKeyId, gener
 /// Unregister all shortcuts on a worker thread (fire-and-forget); failures
 /// are log-only by design.
 ///
-/// `generation` is a fresh stamp taken by the caller right after the
-/// `mem::take` of the local map, outside the store lock — the atomic
-/// counter makes stamp order match call order, which is all the
-/// ArkTS-side guard needs. The ArkTS side raises its global generation
-/// floor to it, so any in-flight register dispatched before this sweep
-/// (smaller generation) is rejected on arrival — the ghost-hotkey race
-/// fix: without it, a register worker completing after this sweep would
-/// leave a physical registration behind that the emptied local map
-/// cannot see, report, or clear.
+/// `generation` is a fresh stamp taken by the caller under the same store
+/// lock as the `mem::take` of the local map (a register stamps and inserts
+/// under that lock too, so no register's insert can slip between the take
+/// and the stamp). The ArkTS side raises its global generation floor to it,
+/// so any in-flight register dispatched before this sweep (smaller
+/// generation) is rejected on arrival — the ghost-hotkey race fix: without
+/// it, a register worker completing after this sweep would leave a
+/// physical registration behind that the emptied local map cannot see,
+/// report, or clear. The reverse direction — a register dispatched after
+/// this sweep whose message overtakes it — is closed on the ArkTS side:
+/// the sweep keeps the physical registration of any id whose per-id
+/// watermark postdates it.
 pub(crate) fn spawn_unregister_all(client: GlobalShortcutClient, generation: u32) {
     std::thread::spawn(move || {
         if let Err(e) = futures_executor::block_on(client.unregister_all(generation)) {

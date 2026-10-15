@@ -88,14 +88,45 @@ declaration. Platform differences to keep in mind:
   `onForeground` with `tag.off` before leaving the foreground). The plugin has
   no `onBackground` hook, so it re-establishes the registration with a full
   off/on cycle whenever the app returns to the foreground with a session
-  still armed — but an armed `scan()`/`write()` has no timeout and no cancel
-  command: if the app is killed while armed, the JS promise dies with the
-  process. Don't arm sessions across expected backgrounding.
+  still armed. Two residual behaviors follow from that design:
+  - While the app is backgrounded, the system may drop the registration —
+    and the plugin cannot notice or rebuild it until the next foreground
+    switch. An armed `scan()`/`write()` has no timeout and no cancel
+    command, so its JS promise stays pending indefinitely, with no error,
+    while the process is alive (if the process is killed instead, the
+    promise simply dies with it). Returning to the foreground restores the
+    registration; staying backgrounded with an armed session means the
+    promise may never settle.
+  - The foreground-boundary off/on cycle has a brief window with no
+    registration armed — a tag tapped in that gap is not discovered and the
+    tap is dropped (an armed session stays pending until a later tap).
+  Don't arm sessions across expected backgrounding.
 
 The Rust-side API (`Nfc::scan()`/`Nfc::write()`) is currently not usable on
 OpenHarmony — see the `openharmony` entry in the crate's
 `[package.metadata.platforms.support]` notes — so use the JavaScript plugin
 API.
+
+#### Verifying the HAR-side NFC_TAG grant (negative control)
+
+The claim above — consuming apps need no entry-side
+`ohos.permission.NFC_TAG` request — is verifiable end-to-end by removing the
+request and proving nothing changes (performed 2026-10-13, Mate 70, mobile
+form factor, on the api-example app):
+
+1. Delete the `ohos.permission.NFC_TAG` request entry from the consuming
+   app's entry `module.json5` (everything else unchanged) and rebuild.
+2. Structural — unpack the built entry `.hap` and inspect the packaged
+   `module.json`: the permission must still be listed (the HAR merge
+   appends it after the entry's own permissions):
+   `unzip -p <entry>.hap module.json | grep NFC_TAG`
+3. Install-time — assert the request reached the package manager:
+   `hdc shell bm dump -n <bundleName>` → `reqPermissionDetails` contains
+   `ohos.permission.NFC_TAG`.
+4. Behavioral — on the negative-control install, run the NFC test suite
+   (its techLists case makes real `tag.on('readerMode')` calls) and arm a
+   `scan()` followed by a physical tag tap: the promise resolves with the
+   tag payload and no `201` permission denial appears in hilog.
 
 ## Contributing
 
