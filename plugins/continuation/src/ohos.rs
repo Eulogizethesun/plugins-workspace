@@ -14,9 +14,10 @@ const CONTINUATION_DATA_MAX_BYTES: usize = 96 * 1024;
 /// (same pattern as the deep-link plugin). Returns `None` when the app is not
 /// initialized yet or its lock is poisoned — commands then degrade to the
 /// pre-migration defaults (`false` / empty), matching the facade's documented
-/// lock-poisoning semantics. The `ContinuationClient` carries the app handle
-/// since issue #87 major-9 migrated the want/continuation statics into
-/// `OpenHarmonyAppInner`.
+/// lock-poisoning semantics. The `ContinuationClient` itself is a zero-sized
+/// handle (the restore/data state lives in openharmony-ability module
+/// statics, `CONTINUATION_RESTORE` / `CONTINUATION_DATA`), so the app lock
+/// here is purely an initialization gate, not a state holder.
 fn with_continuation_client<T>(
     f: impl FnOnce(&ContinuationClient) -> T,
 ) -> Option<T> {
