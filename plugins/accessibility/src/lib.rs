@@ -71,7 +71,7 @@ fn setup_event_forwarding<R: Runtime>(app_handle: tauri::AppHandle<R>) {
     // match it. Without this, bridge calls fail with "not installed for '<module>'".
     if let Ok(guard) = tauri::ohos::APP.lock() {
         if let Some(ohos_app) = guard.as_ref() {
-            if let Err(e) = ohos_app.register_plugin(AccessibilityBridgePlugin) {
+            if let Err(e) = ohos_app.register_plugin(AccessibilityBridgePlugin::new(ohos_app)) {
                 log::error!(
                     "[accessibility] failed to register AccessibilityBridgePlugin: {}",
                     e

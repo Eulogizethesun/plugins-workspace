@@ -1,5 +1,9 @@
 # Changelog
 
+## \[Unreleased]
+
+- Added OpenHarmony (OHOS) backend for scheduled notifications: schedules publish as `reminderAgentManager` system reminders (Timer for one-shot `at`, Calendar for repeating `at`/`interval`/`every`) that fire while the app is backgrounded or killed; schedules with no system-reminder equivalent reject (a one-shot `at` that is already due fires immediately). Requires `ohos.permission.PUBLISH_AGENT_REMINDER` and the AGC agent-reminder entitlement.
+
 ## \[2.3.3]
 
 - [`93426f85`](https://github.com/tauri-apps/plugins-workspace/commit/93426f85120f49beb9f40222bff45185a32d54a9) Fixed an issue that caused docs.rs builds to fail. No user facing changes.

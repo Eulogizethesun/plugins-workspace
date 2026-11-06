@@ -76,6 +76,21 @@ impl AutoLaunchManager {
             .map_err(|e| e.to_string())
             .map_err(Error::Anyhow)
     }
+
+    /// Async adapters giving the plugin commands a unified `*_async` call
+    /// surface across platforms; on OHOS the manager itself is bridge-backed
+    /// and async, so both sides expose the same signatures.
+    pub async fn enable_async(&self) -> Result<()> {
+        self.enable()
+    }
+
+    pub async fn disable_async(&self) -> Result<()> {
+        self.disable()
+    }
+
+    pub async fn is_enabled_async(&self) -> Result<bool> {
+        self.is_enabled()
+    }
 }
 
 #[cfg(target_env = "ohos")]
@@ -87,24 +102,54 @@ impl AutoLaunchManager {
         self.0
             .enable()
             .await
-            .map_err(|e| e.to_string())
-            .map_err(Error::Anyhow)
+            .map_err(|e| Error::Anyhow(e.to_string()))
     }
 
     pub async fn disable(&self) -> Result<()> {
         self.0
             .disable()
             .await
-            .map_err(|e| e.to_string())
-            .map_err(Error::Anyhow)
+            .map_err(|e| Error::Anyhow(e.to_string()))
     }
 
+    /// Queries whether autostart is enabled for this application.
+    ///
+    /// Requires API 21+ on OpenHarmony (`autoStartupManager.getAutoStartupStatusForSelf()`).
+    /// On lower API levels, returns an error naming the required API level.
+    /// `enable` / `disable` are unaffected — they open the system settings page
+    /// (`startAbility`, available from API 12+).
     pub async fn is_enabled(&self) -> Result<bool> {
+        // autoStartupManager.getAutoStartupStatusForSelf is API 21+; below that
+        // the facade fabricates nothing — report the unified version error here
+        // so the JS side sees the clean message (the facade gate would surface
+        // as "GenericFailure, ..." through the Display round-trip below).
+        use openharmony_ability_plugin_autostart::version;
+
+        const MIN_AUTOSTART_API_VERSION: i32 = 21;
+        let current = version::sdk_api_version();
+        if current < MIN_AUTOSTART_API_VERSION {
+            return Err(Error::Anyhow(format!(
+                "isEnabled requires API level {MIN_AUTOSTART_API_VERSION}+ on OpenHarmony (current: {current})"
+            )));
+        }
         self.0
             .is_enabled()
             .await
-            .map_err(|e| e.to_string())
-            .map_err(Error::Anyhow)
+            .map_err(|e| Error::Anyhow(e.to_string()))
+    }
+
+    /// Async adapters exposing the same command-facing `*_async` signatures as
+    /// the desktop manager, so the plugin commands need no cfg dispatch.
+    pub async fn enable_async(&self) -> Result<()> {
+        self.enable().await
+    }
+
+    pub async fn disable_async(&self) -> Result<()> {
+        self.disable().await
+    }
+
+    pub async fn is_enabled_async(&self) -> Result<bool> {
+        self.is_enabled().await
     }
 }
 
@@ -122,26 +167,17 @@ impl<R: Runtime, T: Manager<R>> ManagerExt<R> for T {
 
 #[command]
 async fn enable(manager: State<'_, AutoLaunchManager>) -> Result<()> {
-    #[cfg(not(target_env = "ohos"))]
-    { manager.enable() }
-    #[cfg(target_env = "ohos")]
-    { manager.enable().await }
+    manager.enable_async().await
 }
 
 #[command]
 async fn disable(manager: State<'_, AutoLaunchManager>) -> Result<()> {
-    #[cfg(not(target_env = "ohos"))]
-    { manager.disable() }
-    #[cfg(target_env = "ohos")]
-    { manager.disable().await }
+    manager.disable_async().await
 }
 
 #[command]
 async fn is_enabled(manager: State<'_, AutoLaunchManager>) -> Result<bool> {
-    #[cfg(not(target_env = "ohos"))]
-    { manager.is_enabled() }
-    #[cfg(target_env = "ohos")]
-    { manager.is_enabled().await }
+    manager.is_enabled_async().await
 }
 
 #[derive(Default)]
@@ -282,16 +318,7 @@ impl Builder {
                     let _ = self;
                     use openharmony_ability_plugin_autostart::{AutostartBridgePlugin, AutostartExt};
 
-                    let ohos_app = tauri::ohos::APP
-                        .lock()
-                        .ok()
-                        .and_then(|g| g.as_ref().map(|app| app.clone()))
-                        .ok_or_else(|| {
-                            Error::Anyhow(
-                                "Failed to create AutostartClient: OHOS APP not initialized"
-                                    .to_string(),
-                            )
-                        })?;
+                    let ohos_app = ohos_app()?;
 
                     // Register the Rust-side Autostart bridge plugin before creating
                     // the client. Without this, bridge calls fail with
@@ -313,6 +340,22 @@ impl Builder {
             })
             .build()
     }
+}
+
+/// Clones the global OHOS app instance held in [`tauri::ohos::APP`]
+/// (same pattern as the deep-link/global-shortcut plugins). Errors when the
+/// app is not initialized or its lock is poisoned.
+#[cfg(target_env = "ohos")]
+fn ohos_app() -> Result<tauri::ohos::openharmony_ability::OpenHarmonyApp> {
+    tauri::ohos::APP
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|app| app.clone()))
+        .ok_or_else(|| {
+            Error::Anyhow(
+                "Failed to create AutostartClient: OHOS APP not initialized".to_string(),
+            )
+        })
 }
 
 /// Initializes the plugin.

@@ -41,6 +41,12 @@ This repo and all plugins require a Rust version of at least **1.77.2**
 - ❌: Not supported
 - `?` : Unknown/Untested or Planned
 
+## Cargo Registry Mirror (OpenHarmony)
+
+The workspace `.cargo/config.toml` replaces crates.io with the OpenHarmony artifactory mirror (`crates.repo.openharmony.cn`), so the first build of this workspace requires that mirror to be reachable. Note the blast radius: cargo source replacement cannot be scoped per target, so **every** registry dependency of **every** build in this workspace — not only OHOS targets — resolves through the mirror, and as a virtual repository it can serve an adapted build under a crate's existing version number (that is how the OHOS `stronghold-runtime` adaptation is picked up). If the mirror is unreachable, all workspace builds fail, not just OHOS ones. To build against crates.io instead, delete the `[source.crates-io]` / `[source.ohos-mirror]` replacement in `.cargo/config.toml` — see that file's header comment for why the replacement exists and when it can be removed.
+
+Trust boundary: source replacement also moves checksum verification to the mirror — cargo validates downloads against the index the replacement source serves, so integrity is relative to the mirror rather than to crates.io. Because it is a virtual repository, any crate (including proc-macros and build-script dependencies, whose code runs on the build host) may be served under its official version number with content that differs from the official build. This workspace ships no independent pinning against that (Cargo.lock is gitignored), so treat the mirror as trusted infrastructure for the whole build. Removing the replacement in `.cargo/config.toml` restores the official crates.io source.
+
 ## Contributing
 
 PRs accepted. Please make sure to read the [Contributing Guide](https://github.com/tauri-apps/tauri/blob/dev/.github/CONTRIBUTING.md) before making a pull request.

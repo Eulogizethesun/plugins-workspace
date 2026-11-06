@@ -9,7 +9,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core'
-import { Image } from '@tauri-apps/api/image'
+import { Image, transformImage } from '@tauri-apps/api/image'
 
 /**
  * Writes plain text to the clipboard.
@@ -36,6 +36,17 @@ async function writeText(
 
 /**
  * Gets the clipboard content as plain text.
+ *
+ * #### Platform-specific
+ *
+ * - **HarmonyOS (OHOS):** Reading the pasteboard requires the
+ *   `ohos.permission.READ_PASTEBOARD` user-grant permission (API 12+); the
+ *   plugin requests it on first read — when denied or undeclared the call
+ *   resolves with an empty string, as if the clipboard were empty. The
+ *   permission must be declared in the app's entry module.json5 (with
+ *   reason/usedScene) and included in the AGC signing profile (ACL) — see the
+ *   README's "OpenHarmony (OHOS) Permissions" section.
+ *
  * @example
  * ```typescript
  * import { readText } from '@tauri-apps/plugin-clipboard-manager';
@@ -45,6 +56,42 @@ async function writeText(
  */
 async function readText(): Promise<string> {
   return await invoke('plugin:clipboard-manager|read_text')
+}
+
+/**
+ * Transforms an image into the invoke payload for `write_image`.
+ *
+ * Non-OHOS platforms keep the upstream `transformImage` semantics, so a plain
+ * object faking `{ rid: number }` is never treated as a resource id. The
+ * duck-typing path below only exists for OHOS build artifact compatibility:
+ * Vite/Rolldown may bundle @tauri-apps/api/image into multiple chunks with
+ * separate Image class definitions, so `transformImage`'s instanceof check
+ * fails for Image objects created in a different chunk (so far only observed
+ * in OHOS builds). It is only taken when the os plugin's init script injected
+ * its platform marker — when the marker is missing (os plugin not registered)
+ * we fall back to the upstream path.
+ */
+function transformImageForPlatform(
+  image: string | Image | Uint8Array | ArrayBuffer | number[]
+): string | number | Image | Uint8Array | ArrayBuffer | number[] | null {
+  // __TAURI_OS_PLUGIN_INTERNALS__ is injected by the os plugin init script;
+  // platform() in @tauri-apps/plugin-os reads the same marker.
+  const platform = (
+    window as unknown as {
+      __TAURI_OS_PLUGIN_INTERNALS__?: { platform?: string }
+    }
+  ).__TAURI_OS_PLUGIN_INTERNALS__?.platform
+  if (platform === 'ohos') {
+    interface RidHolder { rid: number }
+    return image == null
+      ? null
+      : typeof image === 'string'
+        ? image
+        : typeof (image as RidHolder).rid === 'number'
+          ? (image as RidHolder).rid
+          : image
+  }
+  return transformImage(image)
 }
 
 /**
@@ -72,27 +119,12 @@ async function readText(): Promise<string> {
  *
  * @since 2.0.0
  */
+
 async function writeImage(
   image: string | Image | Uint8Array | ArrayBuffer | number[]
 ): Promise<void> {
-  // Inline duck-type transformation instead of using transformImage().
-  // Vite/Rolldown may bundle @tauri-apps/api/image into multiple chunks with
-  // separate Image class definitions. When clipboard-manager's chunk has its
-  // own Image class, transformImage's instanceof check fails for Image objects
-  // created in a different chunk. Duck-typing (typeof .rid === 'number')
-  // avoids this cross-chunk class identity problem and correctly extracts the
-  // resource ID for Image instances regardless of bundling layout.
-  interface RidHolder { rid: number }
-  const transformed: string | number | Image | Uint8Array | ArrayBuffer | number[] | null =
-    image == null
-      ? null
-      : typeof image === 'string'
-        ? image
-        : typeof (image as RidHolder).rid === 'number'
-          ? (image as RidHolder).rid
-          : image
   await invoke('plugin:clipboard-manager|write_image', {
-    image: transformed
+    image: transformImageForPlatform(image)
   })
 }
 
@@ -102,7 +134,13 @@ async function writeImage(
  * #### Platform-specific
  *
  * - **Android / iOS:** Not supported.
- * - **HarmonyOS (OHOS):** Not supported (READ_PASTEBOARD permission restriction).
+ * - **HarmonyOS (OHOS):** Supported. Reading the pasteboard requires the
+ *   `ohos.permission.READ_PASTEBOARD` user-grant permission (API 12+); the
+ *   plugin requests it on first read — when denied or undeclared the call
+ *   rejects as if the clipboard held no image. The permission must be declared
+ *   in the app's entry module.json5 (with reason/usedScene) and included in
+ *   the AGC signing profile (ACL) — see the README's "HarmonyOS (OHOS)
+ *   Permissions" section.
  *
  * @example
  * ```typescript
@@ -126,7 +164,7 @@ async function readImage(): Promise<Image> {
  * #### Platform-specific
  *
  * - **Android / iOS:** Not supported.
- * - **HarmonyOS (OHOS):** Supported via pasteboard HTML MIME type. The `altText` parameter is ignored (OHOS clipboard does not support alternate representations).
+ * - **HarmonyOS (OHOS):** Supported via pasteboard HTML MIME type. `altText` is written as a coexisting plain-text (`text/plain`) pasteboard record (HTML stays the primary record), so plain-text paste targets and `readText` observe the plain version. An empty `altText` string is treated as omitted.
  *
  * @example
  * ```typescript

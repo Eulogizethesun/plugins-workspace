@@ -36,7 +36,8 @@ pub async fn get_font_scale() -> Result<f64> {
 /// Returns whether a screen reader is currently open.
 ///
 /// OHOS documents `ohos.permission.ACCESSIBILITY` (system_core) for this query; a
-/// third-party denial rejects with a structured error rather than a silent `false`.
+/// third-party denial rejects with an error message carrying the BusinessError
+/// code rather than a silent `false`.
 #[tauri::command]
 pub async fn is_screen_reader_enabled() -> Result<bool> {
     let client = client()?;

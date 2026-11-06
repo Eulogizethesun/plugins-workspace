@@ -2,7 +2,7 @@
 
 ## \[Unreleased]
 
-- Added OpenHarmony (OHOS) backend for `relaunch()`. Delegates to `AppHandle::request_restart()` which calls `ApplicationContext.restartApp(want)` on the ArkTS side. The process is hard-killed (no `onDestroy` callback).
+- Added OpenHarmony (OHOS) backend for `relaunch()`: restart is unified through `app.request_restart()` (tauri `RunEvent::Exit`), which relaunches the app via `AppControlExt::restartApp()` and `ApplicationContext.restartApp()` (API 12+; kills all app processes, `onDestroy` not fired). The `appRecovery` bridge module (openharmony-ability) was removed.
 
 ## \[2.3.1]
 

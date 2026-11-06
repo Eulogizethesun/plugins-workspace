@@ -44,6 +44,22 @@ interface Options {
   body?: string
   /**
    * Schedule this notification to fire on a later time or a fixed interval.
+   *
+   * #### Platform-specific
+   *
+   * - **HarmonyOS (OHOS):** Scheduled notifications are published as
+   *   `reminderAgentManager` system reminders, so they still fire when the
+   *   app is backgrounded or killed. Repeating `at` schedules repeat on the
+   *   scheduled day-of-month; `every` month/year schedules repeat on the
+   *   creation day (months without that day are skipped; a Feb-29 yearly
+   *   schedule fires only in leap years).
+   *   Schedules without a system-reminder equivalent reject instead of
+   *   scheduling (every hour/minute/second, every N units, twoWeeks, past
+   *   repeating dates, and interval rules mixing month/day with weekday).
+   *   Reminders are quota-managed: without the app's AGC agent-reminder
+   *   entitlement the schedule call rejects with error 1700002, and with
+   *   notifications disabled it rejects with 1700001. A one-shot `at` that
+   *   is already due fires immediately.
    */
   schedule?: Schedule
   /**
@@ -64,10 +80,14 @@ interface Options {
    * Identifier used to group multiple notifications.
    *
    * https://developer.apple.com/documentation/usernotifications/unmutablenotificationcontent/1649872-threadidentifier
+   *
+   * On HarmonyOS (OHOS): maps to the system notification group name.
    */
   group?: string
   /**
    * Instructs the system that this notification is the summary of a group on Android.
+   *
+   * On HarmonyOS (OHOS): ignored — no system equivalent.
    */
   groupSummary?: boolean
   /**
@@ -92,24 +112,35 @@ interface Options {
    * Notification icon.
    *
    * On Android the icon must be placed in the app's `res/drawable` folder.
+   *
+   * On HarmonyOS (OHOS): ignored — decoded PixelMap icons are not wired up.
    */
   icon?: string
   /**
    * Notification large icon (Android).
    *
    * The icon must be placed in the app's `res/drawable` folder.
+   *
+   * On HarmonyOS (OHOS): ignored — decoded PixelMap icons are not wired up.
    */
   largeIcon?: string
   /**
    * Icon color on Android.
+   *
+   * On HarmonyOS (OHOS): ignored — no system equivalent.
    */
   iconColor?: string
   /**
    * Notification attachments.
+   *
+   * On HarmonyOS (OHOS): ignored — no system equivalent.
    */
   attachments?: Attachment[]
   /**
    * Extra payload to store in the notification.
+   *
+   * On HarmonyOS (OHOS): round-trips through `active()` (stored in the
+   * system notification request).
    */
   extra?: Record<string, unknown>
   /**
@@ -118,6 +149,8 @@ interface Options {
    * An application service must manage the dismissal of the notification.
    * It is typically used to indicate a background task that is pending (e.g. a file download)
    * or the user is engaged with (e.g. playing music).
+   *
+   * On HarmonyOS (OHOS): maps to the system ongoing-notification flag.
    */
   ongoing?: boolean
   /**
@@ -126,6 +159,8 @@ interface Options {
   autoCancel?: boolean
   /**
    * Changes the notification presentation to be silent on iOS (no badge, no sound, not listed).
+   *
+   * On HarmonyOS (OHOS): ignored — no per-notification system equivalent.
    */
   silent?: boolean
   /**
@@ -268,7 +303,12 @@ interface PendingNotification {
   id: number
   title?: string
   body?: string
-  schedule: Schedule
+  /**
+   * May be missing on HarmonyOS for entries recovered from system-proxied
+   * reminders after a process restart (one-shot countdown reminders cannot
+   * restore their original date).
+   */
+  schedule?: Schedule
 }
 
 interface ActiveNotification {
@@ -401,6 +441,14 @@ async function registerActionTypes(types: ActionType[]): Promise<void> {
 /**
  * Retrieves the list of pending notifications.
  *
+ * #### Platform-specific
+ *
+ * - **HarmonyOS (OHOS):** System-proxied reminders outlive the app process.
+ *   The list is reconciled with the system (`getAllValidReminders`), so
+ *   reminders that survived a process restart are still listed, while
+ *   one-shot reminders that already fired are pruned. Recovered entries may
+ *   omit `schedule`.
+ *
  * @example
  * ```typescript
  * import { pending } from '@tauri-apps/plugin-notification';
@@ -417,6 +465,13 @@ async function pending(): Promise<PendingNotification[]> {
 
 /**
  * Cancels the pending notifications with the given list of identifiers.
+ *
+ * #### Platform-specific
+ *
+ * - **HarmonyOS (OHOS):** System-proxied reminders outlive the app process.
+ *   Cancelling by id still works after a process restart (reconciled with the
+ *   system via `getAllValidReminders`); `cancelAll` always clears every
+ *   system-level reminder as well.
  *
  * @example
  * ```typescript
@@ -451,6 +506,16 @@ async function cancelAll(): Promise<void> {
 
 /**
  * Retrieves the list of active notifications.
+ *
+ * #### Platform-specific
+ *
+ * - **HarmonyOS (OHOS):** Sourced from the system's live list
+ *   (`getActiveNotifications`), so it survives app restarts. Populated:
+ *   `id`, `title`, `body` and `extra` (round-trips
+ *   {@link Options.extra}). Carried through when the system reports
+ *   them: `group`, `sound` and `tag` (the plugin itself never sets the
+ *   system notification label). Always empty: `data`, `attachments`,
+ *   `groupSummary`, `actionTypeId` and `schedule` (no system equivalent).
  *
  * @example
  * ```typescript
@@ -505,6 +570,17 @@ async function removeAllActive(): Promise<void> {
 /**
  * Creates a notification channel.
  *
+ * #### Platform-specific
+ *
+ * - **HarmonyOS (OHOS):** Channels map onto the system's four notification
+ *   slot types (derived from `importance`); the system keeps a single slot
+ *   per type. `sound`, `lights`, `lightColor`, `vibration` and `visibility`
+ *   are kept in a local table (returned by {@link channels}) but the system
+ *   slot itself uses its default configuration — HarmonyOS exposes no
+ *   public API to customize a slot, so channels sharing the same
+ *   `importance` share one system slot (a runtime warning is logged when
+ *   that happens). Per-notification {@link Options.sound} still applies.
+ *
  * @example
  * ```typescript
  * import { createChannel, Importance, Visibility } from '@tauri-apps/plugin-notification';
@@ -557,6 +633,9 @@ async function removeChannel(id: string): Promise<void> {
  * @since 2.0.0
  */
 async function channels(): Promise<Channel[]> {
+  // `list_channels` (not v2's `listChannels`) matches the snake_case used by
+  // every other command of this plugin; on Android/iOS the mobile fallback
+  // converts it back to camelCase, and desktop never supported channels.
   return await invoke('plugin:notification|list_channels')
 }
 

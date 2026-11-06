@@ -1,4 +1,4 @@
-// Copyright 2019-2024 Tauri Programme within the Commons Conservancy
+// Copyright 2019-2024 Tauri Programme within The Commons Conservancy
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-License-Identifier: MIT
 
@@ -28,7 +28,9 @@ export async function isContinuationRestoreLaunch(): Promise<boolean> {
  * contract — parse it on your side.
  */
 export async function getContinuationData(): Promise<string | null> {
-  return await invoke<string | null>('plugin:continuation|get_continuation_data')
+  return await invoke<string | null>(
+    'plugin:continuation|get_continuation_data'
+  )
 }
 
 /**

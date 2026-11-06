@@ -18,36 +18,58 @@ interface NotificationFeedbackArgs {
 
 // ─── Plugin Implementation ───
 
-// Maps Tauri ImpactFeedbackStyle (serde camelCase: light/medium/heavy/soft/rigid)
-// to OHOS preset vibration effect IDs.
-function impactStyleToEffectId(style: string): string {
+// Maps Tauri ImpactFeedbackStyle (light/medium/heavy/soft/rigid) to an OHOS
+// preset vibration effect (effectId) plus a strength (intensity).
+//
+// The simple documented HapticFeedback presets (js-apis-vibrator) are only
+// 'haptic.effect.soft' (gentle, low-frequency), 'haptic.effect.hard'
+// (heavy, mid-frequency) and 'haptic.effect.sharp' (sharp, high-frequency)
+// — there are no light/medium/heavy/rigid ids, so styles map
+// onto the closest documented preset rather than onto invented ids
+// (isSupportEffect would return false for those and every call would
+// silently degrade to the plain time-based fallback vibration).
+//
+// medium and heavy share 'haptic.effect.hard' and are separated only by
+// VibratePreset.intensity (API 12+, documented range: integers in (0,100],
+// default 100): medium plays at half strength, heavy at the default full
+// strength, so the two styles no longer issue identical vibrations. Per the
+// official docs, effects or devices that do not support intensity adjustment
+// vibrate at the default strength — the call still succeeds.
+interface ImpactPreset {
+  effectId: string;
+  intensity: number;
+}
+
+function impactStyleToPreset(style: string): ImpactPreset {
   switch (style) {
     case 'light':
-      return 'haptic.effect.soft';
-    case 'heavy':
-      return 'haptic.effect.rigid';
     case 'soft':
-      return 'haptic.effect.soft';
-    case 'rigid':
-      return 'haptic.effect.rigid';
+      return { effectId: 'haptic.effect.soft', intensity: 50 };
     case 'medium':
+      return { effectId: 'haptic.effect.hard', intensity: 50 };
+    case 'heavy':
+      return { effectId: 'haptic.effect.hard', intensity: 100 };
+    case 'rigid':
+      return { effectId: 'haptic.effect.sharp', intensity: 50 };
     default:
-      return 'haptic.effect.light';
+      return { effectId: 'haptic.effect.soft', intensity: 50 };
   }
 }
 
-// Maps Tauri NotificationFeedbackType (serde camelCase: success/warning/error)
-// to OHOS preset vibration effect IDs.
+// Maps Tauri NotificationFeedbackType (success/warning/error) to the OHOS
+// notification feedback effect IDs (API 18+). On devices below API 18 — or
+// without these presets — vibratePresetWithFallback falls back to a short
+// time-based vibration.
 function notificationTypeToEffectId(type: string): string {
   switch (type) {
     case 'success':
-      return 'haptic.effect.rigid';
+      return 'haptic.notice.success';
     case 'warning':
-      return 'haptic.effect.light';
+      return 'haptic.notice.warning';
     case 'error':
-      return 'haptic.effect.heavy';
+      return 'haptic.notice.fail';
     default:
-      return 'haptic.effect.light';
+      return 'haptic.notice.success';
   }
 }
 
@@ -70,7 +92,8 @@ export class HapticsPlugin extends Plugin {
   private async doVibrate(invoke: Invoke): Promise<void> {
     try {
       const args: VibrateArgs = JSON.parse(invoke.parseArgs()) as VibrateArgs;
-      const duration = args.duration > 0 ? args.duration : 500;
+      // 300ms default matches the Android plugin.
+      const duration = args.duration > 0 ? args.duration : 300;
       await vibrator.startVibration(
         { type: 'time', duration: duration } as vibrator.VibrateEffect,
         { usage: 'unknown' } as vibrator.VibrateAttribute
@@ -83,6 +106,30 @@ export class HapticsPlugin extends Plugin {
     }
   }
 
+  // ─── shared preset-vibration helper ───
+
+  /**
+   * Vibrates with a preset effect, falling back to a short time-based
+   * vibration when the device does not support the effect id — preset
+   * support varies per device, and the haptic.notice.* presets require
+   * API 18+. Throws on startVibration failure; callers surface it via
+   * invoke.reject.
+   */
+  private async vibratePresetWithFallback(effectId: string, intensity: number, fallbackDuration: number): Promise<void> {
+    const supported = await vibrator.isSupportEffect(effectId);
+    if (!supported) {
+      await vibrator.startVibration(
+        { type: 'time', duration: fallbackDuration } as vibrator.VibrateEffect,
+        { usage: 'unknown' } as vibrator.VibrateAttribute
+      );
+      return;
+    }
+    await vibrator.startVibration(
+      { type: 'preset', effectId: effectId, count: 1, intensity: intensity } as vibrator.VibrateEffect,
+      { usage: 'unknown' } as vibrator.VibrateAttribute
+    );
+  }
+
   // ─── impactFeedback (style) ───
 
   private handleImpactFeedback(invoke: Invoke): void {
@@ -92,21 +139,8 @@ export class HapticsPlugin extends Plugin {
   private async doImpactFeedback(invoke: Invoke): Promise<void> {
     try {
       const args: ImpactFeedbackArgs = JSON.parse(invoke.parseArgs()) as ImpactFeedbackArgs;
-      const effectId = impactStyleToEffectId(args.style);
-      const supported = await vibrator.isSupportEffect(effectId);
-      if (!supported) {
-        // Fallback to a short time vibration
-        await vibrator.startVibration(
-          { type: 'time', duration: 30 } as vibrator.VibrateEffect,
-          { usage: 'unknown' } as vibrator.VibrateAttribute
-        );
-        invoke.resolve('');
-        return;
-      }
-      await vibrator.startVibration(
-        { type: 'preset', effectId: effectId, count: 1, intensity: 50 } as vibrator.VibrateEffect,
-        { usage: 'unknown' } as vibrator.VibrateAttribute
-      );
+      const preset = impactStyleToPreset(args.style);
+      await this.vibratePresetWithFallback(preset.effectId, preset.intensity, 30);
       invoke.resolve('');
     } catch (e) {
       const err = e as BusinessError;
@@ -125,19 +159,7 @@ export class HapticsPlugin extends Plugin {
     try {
       const args: NotificationFeedbackArgs = JSON.parse(invoke.parseArgs()) as NotificationFeedbackArgs;
       const effectId = notificationTypeToEffectId(args.type);
-      const supported = await vibrator.isSupportEffect(effectId);
-      if (!supported) {
-        await vibrator.startVibration(
-          { type: 'time', duration: 50 } as vibrator.VibrateEffect,
-          { usage: 'unknown' } as vibrator.VibrateAttribute
-        );
-        invoke.resolve('');
-        return;
-      }
-      await vibrator.startVibration(
-        { type: 'preset', effectId: effectId, count: 1, intensity: 60 } as vibrator.VibrateEffect,
-        { usage: 'unknown' } as vibrator.VibrateAttribute
-      );
+      await this.vibratePresetWithFallback(effectId, 60, 50);
       invoke.resolve('');
     } catch (e) {
       const err = e as BusinessError;
@@ -154,20 +176,8 @@ export class HapticsPlugin extends Plugin {
 
   private async doSelectionFeedback(invoke: Invoke): Promise<void> {
     try {
-      const effectId = 'haptic.effect.soft';
-      const supported = await vibrator.isSupportEffect(effectId);
-      if (!supported) {
-        await vibrator.startVibration(
-          { type: 'time', duration: 15 } as vibrator.VibrateEffect,
-          { usage: 'unknown' } as vibrator.VibrateAttribute
-        );
-        invoke.resolve('');
-        return;
-      }
-      await vibrator.startVibration(
-        { type: 'preset', effectId: effectId, count: 1, intensity: 40 } as vibrator.VibrateEffect,
-        { usage: 'unknown' } as vibrator.VibrateAttribute
-      );
+      // Selection ticks use the soft preset (the lightest documented effect).
+      await this.vibratePresetWithFallback('haptic.effect.soft', 40, 15);
       invoke.resolve('');
     } catch (e) {
       const err = e as BusinessError;

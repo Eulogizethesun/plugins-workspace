@@ -23,7 +23,7 @@ linux = { level = "full", notes = "" }
 macos = { level = "full", notes = "" }
 android = { level = "partial", notes = "Does not support folder picker" }
 ios = { level = "partial", notes = "Does not support folder picker" }
-openharmony = { level = "partial", notes = "Does not support folder picker" }
+openharmony = { level = "partial", notes = "File/folder open and save dialogs via DocumentViewPicker, message dialogs via promptAction; folder picking maps to selectMode (MIXED on 2in1 — non-directory URIs picked alongside are dropped; FOLDER on non-2in1 devices, API 26+ only — older versions resolve as a cancelled dialog (null), the ArkTS error is swallowed by the bridge); `filters`, `pickerMode` and `fileAccessMode` are ignored, `defaultPath` is ignored on open (on save only its file name is used), `title` applies to message dialogs only, `multiple` is capped at 10 (files; the system limits phone folder selection to one), message `kind` is ignored" }
 
 [build-dependencies]
 tauri-plugin = { workspace = true, features = ["build"] }

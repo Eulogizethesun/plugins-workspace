@@ -151,5 +151,53 @@ function convertToRustHeaders(options?: { headers?: HeadersInit }) {
   }
 }
 
-export type { CheckOptions, DownloadOptions, DownloadEvent }
-export { check, Update }
+/** AppGallery update check result */
+interface AppGalleryUpdate {
+  /**
+   * Whether an update is available on AppGallery
+   */
+  available: boolean
+  /**
+   * Version of the currently running application
+   */
+  currentVersion: string
+  /**
+   * Version of the available update, or `null` if not reported by the system
+   */
+  version: string | null
+}
+
+/**
+ * Check for updates on AppGallery.
+ *
+ * Only available on OpenHarmony. The update source is Huawei AppGallery, not
+ * the `endpoints`/`pubkey` configuration in `tauri.conf.json` - that
+ * configuration has no effect on OpenHarmony.
+ *
+ * `version` is `null` on devices with an API level lower than 20, where the
+ * system does not report the new version number.
+ *
+ * @since 2.11.0
+ */
+async function checkAppGalleryUpdate(): Promise<AppGalleryUpdate | null> {
+  const info = await invoke<AppGalleryUpdate>(
+    'plugin:updater|check_app_gallery_update'
+  )
+  return info.available ? info : null
+}
+
+/**
+ * Show the system update dialog of AppGallery.
+ *
+ * Only available on OpenHarmony. The dialog is user-driven - whether to
+ * download and install the update is decided by the user, so this promise
+ * resolving does not mean the update was installed.
+ *
+ * @since 2.11.0
+ */
+async function showAppGalleryUpdateDialog(): Promise<void> {
+  await invoke('plugin:updater|show_app_gallery_update_dialog')
+}
+
+export type { CheckOptions, DownloadOptions, DownloadEvent, AppGalleryUpdate }
+export { check, Update, checkAppGalleryUpdate, showAppGalleryUpdateDialog }

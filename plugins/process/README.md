@@ -9,6 +9,7 @@ This plugin provides APIs to access the current process. To spawn child processe
 | macOS    | ✓         |
 | Android  | x         |
 | iOS      | x         |
+| OpenHarmony | ✓      |
 
 ## Install
 

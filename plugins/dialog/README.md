@@ -9,6 +9,7 @@ Native system dialogs for opening and saving files along with message dialogs.
 | macOS    | ✓         |
 | Android  | ✓         |
 | iOS      | ✓         |
+| OpenHarmony | ✓ (folder picker needs API 26+ on non-2in1 devices) |
 
 ## Install
 
