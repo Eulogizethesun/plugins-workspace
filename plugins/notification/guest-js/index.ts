@@ -291,7 +291,12 @@ class Schedule {
 interface Attachment {
   /** Attachment identifier. */
   id: string
-  /** Attachment URL. Accepts the `asset` and `file` protocols. */
+  /**
+   * Attachment URL. Accepts the `asset` and `file` protocols.
+   *
+   * On OHOS the `asset` protocol is not readable from the notification
+   * plugin; attachment URLs are resolved as file paths or `file://` URIs.
+   */
   url: string
 }
 

@@ -158,11 +158,10 @@ JavaScript, so `attachments` stays empty rather than being faked.
 
 ### Internal commands on OHOS
 
-Three commands of this plugin are reachable on OHOS only through the mobile
-fallback channel instead of the Rust `invoke_handler`, and are kept as
-internal commands deliberately (`batch`, `show`, `checkPermissions` — the
-latter two are also used by the web-notification polyfill and the plugin's
-own permission checks). Reachability chain, verified end-to-end:
+Three commands of this plugin (`batch`, `show`, `checkPermissions`) are
+reachable on OHOS only through the mobile fallback channel instead of the
+Rust `invoke_handler`, and are kept as internal commands deliberately.
+Reachability chain, verified end-to-end:
 
 1. **ACL** — `notification:default` grants `allow-batch` /
    `allow-check-permissions` (`permissions/default.toml`); apps using the
@@ -180,9 +179,21 @@ own permission checks). Reachability chain, verified end-to-end:
 
 They are not part of the supported guest-API surface (no
 `@tauri-apps/plugin-notification` export); the guest bindings use the
-typed Rust commands. Removing them would break the internal callers above,
-so they are kept — this note documents that they are internal, not public
-API.
+typed Rust commands. Retention differs per command:
+
+- `show` and `checkPermissions` have internal callers: the Rust mobile
+  bridge (`src/mobile.rs`) invokes them. `permission_state()` — the plugin's
+  own permission checks, e.g. the `is_permission_granted` command — calls
+  `checkPermissions`. `NotificationBuilder::show()` calls `show`, reached
+  from the typed `notify` command; the web-notification polyfill reaches it
+  through that same path indirectly (`plugin:notification|notify` → Rust
+  `notify` → `show`). Removing either would break those callers.
+- `batch` has no caller anywhere in this repository. It is kept because the
+  `allow-batch` ACL entry is part of `notification:default` and the mobile
+  fallback channel above makes it reachable; removing it would change the
+  plugin's permission/behavior surface rather than remove dead code.
+
+This note documents that they are internal, not public API.
 
 ## Contributing
 
