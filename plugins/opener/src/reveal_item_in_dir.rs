@@ -80,8 +80,10 @@ where
 /// OHOS variant of [`reveal_item_in_dir`]: async — the reveal goes through the
 /// openharmony-ability bridge (TSFN → ArkTS Want). The ArkTS side starts an
 /// **implicit** Want — `action: "ohos.want.action.viewData"` with the parent
-/// directory URI in `want.parameters.fileUri` (plus the public-directory
-/// virtual-name mapping in `want.parameters.external_storage_uuid`) and the
+/// directory URI in `want.parameters.fileUri` (a file-manager virtual URI
+/// where the public-directory prefix's top-level directory is mapped to a
+/// virtual name inside the URI value; `want.parameters.external_storage_uuid`
+/// is the constant `"LOCAL"`, the local disk id) and the
 /// `FLAG_AUTH_READ_URI_PERMISSION` flag — and lets the system resolve the
 /// handler; no bundle name is hardcoded. When no handler matches the Want,
 /// `startAbility` fails with error 16000019 ("No matching ability is found")

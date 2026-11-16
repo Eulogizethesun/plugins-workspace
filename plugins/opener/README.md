@@ -121,16 +121,27 @@ fn main() {
 
 On HarmonyOS, `revealItemInDir` / `reveal_item_in_dir` (and the multi-path
 variants) open the parent directory with an **implicit** `startAbility` Want:
-`action: "ohos.want.action.viewData"` carrying the directory URI in
-`want.parameters.fileUri` (with the public-directory prefix mapped to a
-virtual name in `want.parameters.external_storage_uuid`) and the
-`FLAG_AUTH_READ_URI_PERMISSION` flag. No bundle name or ability name is
-hardcoded — the system resolves the handler for the Want (on Huawei devices
-the resolved handler is the built-in file manager). Consequences:
+`action: "ohos.want.action.viewData"` carrying the target in
+`want.parameters.fileUri` — a file-manager virtual URI
+(`file://docs/storage/Users/currentUser/<virtualName>/...`, where the
+public-directory prefix's top-level directory is mapped to a virtual name
+inside the URI value) — plus `want.parameters.external_storage_uuid = "LOCAL"`
+(the local disk id) and the `FLAG_AUTH_READ_URI_PERMISSION` flag. No bundle
+name or ability name is hardcoded: the system resolves the handler for the
+implicit Want. Consequences:
 
-- When no handler is registered for the Want, `startAbility` fails with error
-  `16000019` ("No matching ability is found", `UIAbilityContext.d.ts`) and the
-  plugin surfaces a clear "reveal is not supported" error to the caller.
+- Which handlers actually declare matching skills for this Want has not been
+  verified yet (a `bm dump` device round of the file manager's skills is
+  pending), so the resolved handler is not guaranteed to be the built-in file
+  manager on any given device. When no handler matches the Want,
+  `startAbility` fails with error `16000019` ("No matching ability is found",
+  `UIAbilityContext.d.ts`) and the plugin surfaces a clear "reveal is not
+  supported" error to the caller — there is no fallback.
+- Historical risk note (2026-08-28 2in1 device experiment): a bare
+  `viewData` + `file://` Want **without** the parameter contract above only
+  matched archive UTD types and silently opened the notepad handler instead
+  of a file manager; the `parameters.fileUri` + `external_storage_uuid`
+  parameter form is what routes the dispatch to the file manager.
 - Only the parent directory is opened — OHOS has no API to highlight the item
   inside it. The multi-path variants reveal only the first path's parent.
 - App-sandbox paths (e.g. `appCacheDir()`, anything under `/data/storage/` or
@@ -138,10 +149,11 @@ the resolved handler is the built-in file manager). Consequences:
   error; the handler cannot open them.
 - Only public directories under `/storage/media/100/local/files/<top>/...` or
   `/storage/Users/currentUser/...` can be revealed, where `<top>` maps to a
-  virtual name in `external_storage_uuid` (`docs`→`Documents`,
+  virtual name inside the `fileUri` value (`docs`→`Documents`,
   `desktop`→`Desktop`, `download`→`Download`, `pictures`→`Images`,
   `music`/`audio`→`Music`, `videos`→`Videos`); other prefixes are rejected
-  with a documented error.
+  with a documented error. Only `docs`→`Documents` has been verified
+  end-to-end on a 2in1 desktop; the other virtual names are unverified.
 
 ## Contributing
 
