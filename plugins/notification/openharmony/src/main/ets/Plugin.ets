@@ -1,4 +1,5 @@
 import { notificationManager } from '@kit.NotificationKit';
+import { image } from '@kit.ImageKit';
 import { reminderAgentManager } from '@kit.BackgroundTasksKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { wantAgent } from '@kit.AbilityKit';
@@ -22,7 +23,7 @@ interface NotificationData {
   icon?: string;
   largeIcon?: string;
   iconColor?: string;
-  attachments?: object[];
+  attachments?: AttachmentWire[];
   extra?: Record<string, Object>;
   ongoing?: boolean;
   autoCancel?: boolean;
@@ -155,6 +156,13 @@ interface NotificationIdRef {
   id: number;
 }
 
+// Wire shape of one guest attachment (models.rs `Attachment`, camelCase
+// serde): { id, url } — url serializes as a plain string.
+interface AttachmentWire {
+  id?: string;
+  url?: string;
+}
+
 interface BatchArgs {
   notifications: NotificationData[];
 }
@@ -206,6 +214,19 @@ function importanceToSlotType(importance: number | undefined): notificationManag
       return notificationManager.SlotType.OTHER_TYPES;
   }
 }
+
+// ─── Icon / picture pixel-byte limits ───
+
+// notificationRequest.d.ts smallIcon (:300-310) and largeIcon (:311-322):
+// "The total number of the icon pixel bytes cannot exceed 192 KB ... The
+// setting does not take effect if the limit is exceeded" — the system
+// silently ignores oversized icons, so the plugin warns and drops them
+// itself instead of publishing an icon that never shows.
+const ICON_MAX_PIXEL_BYTES = 192 * 1024;
+
+// notificationContent.d.ts NotificationPictureContent.picture (:214-221):
+// "The total bytes of the image pixels ... cannot exceed 2 MB".
+const PICTURE_MAX_PIXEL_BYTES = 2 * 1024 * 1024;
 
 // ─── Plugin Implementation ───
 
@@ -311,6 +332,38 @@ export class NotificationPlugin extends Plugin {
       request.extraInfo = args.extra as Record<string, Object>;
     }
 
+    // icon / largeIcon: decoded to a PixelMap and attached as the system
+    // smallIcon/largeIcon fields (#209). Both are image.PixelMap
+    // (notificationRequest.d.ts smallIcon :310 / largeIcon :322, @since 7,
+    // pixel bytes ≤ 192KB). A source that cannot be resolved or decoded, or
+    // one exceeding the 192KB limit, is dropped with a warning — the
+    // notification still publishes (honest degradation, never a hard error).
+    if (args.icon != null) {
+      const small = await this.decodeImage(args.icon, 'icon', ICON_MAX_PIXEL_BYTES, true);
+      if (small != null) {
+        request.smallIcon = small;
+      }
+    }
+    if (args.largeIcon != null) {
+      const large = await this.decodeImage(args.largeIcon, 'largeIcon', ICON_MAX_PIXEL_BYTES, true);
+      if (large != null) {
+        request.largeIcon = large;
+      }
+    }
+
+    // attachments: the first attachment that decodes switches the content to
+    // the system picture layout NOTIFICATION_CONTENT_PICTURE (#209)
+    // (NotificationContent.picture, notificationContent.d.ts :502). The
+    // picture layout replaces the basic/long-text/multiline layout and the
+    // picture shows when the notification is expanded; only the first
+    // attachment applies. If none decodes the original content is kept.
+    if (args.attachments != null && args.attachments.length > 0) {
+      const picture = await this.buildPictureContent(args);
+      if (picture != null) {
+        request.content = picture;
+      }
+    }
+
     // action buttons: look up registered action type and build NotificationActionButtons
     if (args.actionTypeId != null) {
       const buttons = await this.buildActionButtons(args.actionTypeId, id);
@@ -320,6 +373,136 @@ export class NotificationPlugin extends Plugin {
     }
 
     return request;
+  }
+
+  // ─── image decoding (icon / largeIcon / attachments, #209) ───
+
+  /**
+   * Decodes an image source string into a PixelMap, or returns null when the
+   * source cannot be used — the caller then drops the field (or falls
+   * through to the next attachment) and the notification still publishes.
+   *
+   * Resolution order for icons (mirrors this plugin's `sound` convention of
+   * "rawfile name or sandbox path"):
+   *   1. rawfile resource name — resourceManager.getRawFileContent
+   *      (app `resources/rawfile` directory);
+   *   2. file path or `file://` URI — image.createImageSource.
+   *
+   * For attachment URLs only the path/URI path is attempted (a URL is not a
+   * rawfile name).
+   *
+   * Images whose pixel bytes exceed maxPixelBytes are dropped with a warning:
+   * the system would silently ignore oversized icons (notificationRequest.d.ts
+   * smallIcon) or reject the request (picture content), so the plugin degrades
+   * honestly instead of relying on the system behavior.
+   */
+  private async decodeImage(spec: string, field: string, maxPixelBytes: number, allowRawfile: boolean): Promise<image.PixelMap | null> {
+    if (this.context == null) {
+      console.warn('[NotificationPlugin] ' + field + ': context is null, cannot resolve "' + spec + '"');
+      return null;
+    }
+    if (spec.length === 0) {
+      console.warn('[NotificationPlugin] ' + field + ': empty source, dropping the field');
+      return null;
+    }
+
+    let source: image.ImageSource | null = null;
+    if (allowRawfile) {
+      // 1. rawfile resource name (resources/rawfile/<spec>)
+      try {
+        const bytes: Uint8Array = await this.context.resourceManager.getRawFileContent(spec);
+        // Copy into a dedicated ArrayBuffer: a Uint8Array view's .buffer may
+        // be larger/offset from the view range.
+        const buf: ArrayBuffer = new ArrayBuffer(bytes.byteLength);
+        new Uint8Array(buf).set(bytes);
+        source = image.createImageSource(buf);
+      } catch (_e) {
+        source = null; // fall through to the path/URI attempt
+      }
+    }
+
+    if (source == null) {
+      // 2. file path or URI
+      try {
+        source = image.createImageSource(spec);
+      } catch (_e) {
+        if (spec.startsWith('file://')) {
+          // retry with the bare sandbox path
+          try {
+            source = image.createImageSource(spec.substring('file://'.length));
+          } catch (_e2) {
+            source = null;
+          }
+        }
+      }
+    }
+
+    if (source == null) {
+      console.warn('[NotificationPlugin] ' + field + ': cannot resolve "' + spec + '", dropping the field');
+      return null;
+    }
+
+    try {
+      const pixelMap: image.PixelMap = await source.createPixelMap();
+      const pixelBytes = pixelMap.getPixelBytesNumber();
+      if (pixelBytes > maxPixelBytes) {
+        console.warn('[NotificationPlugin] ' + field + ': decoded image exceeds ' + maxPixelBytes +
+          ' pixel bytes (' + pixelBytes + '), dropping the field');
+        await pixelMap.release();
+        return null;
+      }
+      return pixelMap;
+    } catch (_e) {
+      console.warn('[NotificationPlugin] ' + field + ': image decode failed for "' + spec + '", dropping the field');
+      return null;
+    } finally {
+      await source.release();
+    }
+  }
+
+  /**
+   * Builds NOTIFICATION_CONTENT_PICTURE content from the first attachment
+   * that decodes (#209). NotificationPictureContent requires non-empty
+   * briefText/expandedTitle (notificationContent.d.ts :205/:213) — they are
+   * synthesized from the notification's own title/body/summary. Returns null
+   * when no attachment decodes (the caller keeps the existing content).
+   */
+  private async buildPictureContent(args: NotificationData): Promise<notificationManager.NotificationContent | null> {
+    const attachments = args.attachments ?? [];
+    const title = args.title ?? '';
+    const body = args.body ?? '';
+    const summary = args.summary ?? '';
+
+    for (const att of attachments) {
+      const url = att.url ?? '';
+      if (url.length === 0) {
+        continue;
+      }
+      const pixelMap = await this.decodeImage(url, 'attachments', PICTURE_MAX_PIXEL_BYTES, false);
+      if (pixelMap == null) {
+        continue;
+      }
+      // briefText/expandedTitle must be non-empty strings
+      // (notificationContent.d.ts NotificationPictureContent) — fall back
+      // through the notification's own fields, then a constant.
+      const briefText = summary.length > 0 ? summary : (body.length > 0 ? body : (title.length > 0 ? title : 'Notification'));
+      const expandedTitle = title.length > 0 ? title : (summary.length > 0 ? summary : (body.length > 0 ? body : 'Notification'));
+      const pictureContent: notificationManager.NotificationPictureContent = {
+        title: title,
+        text: body,
+        additionalText: summary,
+        briefText: briefText,
+        expandedTitle: expandedTitle,
+        picture: pixelMap
+      };
+      const content: notificationManager.NotificationContent = {
+        notificationContentType: notificationManager.ContentType.NOTIFICATION_CONTENT_PICTURE,
+        picture: pictureContent
+      };
+      return content;
+    }
+    console.warn('[NotificationPlugin] attachments: no attachment decoded, keeping the regular content layout');
+    return null;
   }
 
   /**
@@ -1180,12 +1363,17 @@ export class NotificationPlugin extends Plugin {
    * NotificationRequest → guest ActiveNotification mapping:
    *   id → id (request id, defaults to 0 — required by the Rust model)
    *   label → tag (never set by this plugin; normally absent)
-   *   content.{normal|longText|multiLine}.{title,text} → title/body
+   *   content.{normal|longText|multiLine|picture}.{title,text} → title/body
    *   groupName → group
    *   sound → sound
    *   extraInfo → extra (round-trip of Options.extra via buildRequest)
    * Not recoverable: schedule (already delivered), actionTypeId,
    * attachments, groupSummary, data (kept empty) — no system equivalent.
+   * smallIcon/largeIcon (Options.icon/largeIcon) and the picture-content
+   * image (Options.attachments) are also not echoed: they live on the system
+   * request as image.PixelMap, which cannot be serialized back to JS — the
+   * wire model has no icon field, and attachments stay empty rather than
+   * being faked from an unreadable PixelMap (#209).
    *
    * Error codes are 401/1600001/1600002/1600003 (service errors only), so a
    * failure degrades to [] like getPending instead of rejecting.
@@ -1209,6 +1397,11 @@ export class NotificationPlugin extends Plugin {
           } else if (content.multiLine != null) {
             title = content.multiLine.title;
             body = content.multiLine.text;
+          } else if (content.picture != null) {
+            // picture content (Options.attachments) extends the basic
+            // content, so title/body are still readable back
+            title = content.picture.title;
+            body = content.picture.text;
           }
         }
         const wire: ActiveNotificationWire = {
