@@ -157,16 +157,54 @@ pub fn locale() -> Option<String> {
 
 /// Returns the current operating system hostname.
 ///
-/// OHOS does not expose a public hostname API. The `openharmony-ability` crate
-/// does not provide a device-info bridge (deviceInfo is only available on the
-/// ArkTS side, not via Rust NAPI). Returns a constant "ohos" string as a
-/// placeholder; callers needing the device model should query system properties
-/// from the ArkTS layer directly.
+/// #### Platform-specific
+///
+/// - **OHOS:** the platform exposes no public hostname API — the SDK API
+///   surface has no hostname getter (#215; the only candidate,
+///   `settings.general.DEVICE_NAME`, is the user-facing device name, not a
+///   network hostname, and is not adopted). The function returns the neutral
+///   placeholder `"localhost"` and logs a one-time warning, instead of
+///   fabricating a device-specific value. Applications that need a real
+///   hostname must resolve one themselves.
 pub fn hostname() -> String {
     #[cfg(target_env = "ohos")]
-    return String::from("ohos");
+    {
+        // One-time warning so callers notice the placeholder instead of
+        // silently treating "localhost" as the device's real hostname (#215).
+        static WARN_ONCE: std::sync::Once = std::sync::Once::new();
+        WARN_ONCE.call_once(|| {
+            log::warn!(
+                "os: hostname() has no OHOS API; returning the \"localhost\" placeholder (no device-specific value is fabricated)"
+            );
+        });
+        return String::from("localhost");
+    }
     #[cfg(not(target_env = "ohos"))]
     gethostname::gethostname().to_string_lossy().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hostname;
+
+    /// `hostname()` is stable and non-empty across calls (OHOS: the constant
+    /// "localhost" placeholder — no device value is fabricated, #215;
+    /// desktop/mobile-other: the real hostname, stable within a process).
+    #[test]
+    fn hostname_is_stable_and_non_empty() {
+        let first = hostname();
+        assert!(!first.is_empty(), "hostname() returned an empty string");
+        assert_eq!(first, hostname(), "hostname() changed between calls");
+    }
+
+    /// On OHOS the placeholder is exactly "localhost" — a value that cannot
+    /// be mistaken for a real device hostname (the previous "ohos" constant
+    /// read like one). Compiles into the OHOS target only.
+    #[cfg(target_env = "ohos")]
+    #[test]
+    fn hostname_placeholder_is_localhost() {
+        assert_eq!(hostname(), "localhost");
+    }
 }
 
 #[derive(Template)]
