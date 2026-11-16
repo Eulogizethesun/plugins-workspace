@@ -156,6 +156,34 @@ populates are listed in the `active()` API documentation. Icon images
 on the system request as `image.PixelMap`, which cannot be serialized back to
 JavaScript, so `attachments` stays empty rather than being faked.
 
+### Internal commands on OHOS
+
+Three commands of this plugin are reachable on OHOS only through the mobile
+fallback channel instead of the Rust `invoke_handler`, and are kept as
+internal commands deliberately (`batch`, `show`, `checkPermissions` — the
+latter two are also used by the web-notification polyfill and the plugin's
+own permission checks). Reachability chain, verified end-to-end:
+
+1. **ACL** — `notification:default` grants `allow-batch` /
+   `allow-check-permissions` (`permissions/default.toml`); apps using the
+   default permission set (e.g. the api example's `run-app.json`) allow-list
+   the commands.
+2. **Rust** — the plugin's Rust `invoke_handler` (`src/lib.rs`)
+   registers only the typed commands; a bare guest
+   `invoke('plugin:notification|batch')` is not handled there, so tauri's
+   mobile fallback takes over (`crates/tauri/src/plugin/mobile.rs`:
+   `run_mobile_channel_fallback` → `run_command` → `dispatch_run_command`).
+3. **ArkTS** — the fallback reaches the plugin's ArkTS command registry
+   (`Plugin.ets` `getCommands()`, e.g. `commands.set('batch', ...)`), whose
+   `handleBatch`/`publishBatch` implementation really publishes each
+   notification and resolves the id list.
+
+They are not part of the supported guest-API surface (no
+`@tauri-apps/plugin-notification` export); the guest bindings use the
+typed Rust commands. Removing them would break the internal callers above,
+so they are kept — this note documents that they are internal, not public
+API.
+
 ## Contributing
 
 PRs accepted. Please make sure to read the Contributing Guide before making a pull request.
