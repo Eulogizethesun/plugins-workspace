@@ -120,30 +120,28 @@ fn main() {
 ## OpenHarmony (OHOS) Platform Notes
 
 On HarmonyOS, `revealItemInDir` / `reveal_item_in_dir` (and the multi-path
-variants) launch the **Huawei file manager** (`com.huawei.hmos.filemanager`,
-`MainAbility`, module `pc`) with an explicit Want whose target is passed via
-`want.parameters.fileUri` + `want.parameters.external_storage_uuid = "LOCAL"`.
-This explicit form is the only one empirically verified to reach the file
-manager on a 2in1 desktop: a generic `viewData` + `file://` Want only matches
-archive UTD types and silently falls back to the notepad handler, and the OHOS
-SDK exposes no system-generic "reveal in folder" API. Consequences:
+variants) open the parent directory with an **implicit** `startAbility` Want:
+`action: "ohos.want.action.viewData"` carrying the directory URI in
+`want.parameters.fileUri` (with the public-directory prefix mapped to a
+virtual name in `want.parameters.external_storage_uuid`) and the
+`FLAG_AUTH_READ_URI_PERMISSION` flag. No bundle name or ability name is
+hardcoded — the system resolves the handler for the Want (on Huawei devices
+the resolved handler is the built-in file manager). Consequences:
 
-- On systems without this file manager (non-Huawei environments, or a future
-  package rename), the launch fails and the error is propagated to the caller.
+- When no handler is registered for the Want, `startAbility` fails with error
+  `16000019` ("No matching ability is found", `UIAbilityContext.d.ts`) and the
+  plugin surfaces a clear "reveal is not supported" error to the caller.
 - Only the parent directory is opened — OHOS has no API to highlight the item
   inside it. The multi-path variants reveal only the first path's parent.
 - App-sandbox paths (e.g. `appCacheDir()`, anything under `/data/storage/` or
   `/data/app/`) are rejected up front with a documented platform-limitation
-  error; the file manager cannot open them.
+  error; the handler cannot open them.
 - Only public directories under `/storage/media/100/local/files/<top>/...` or
   `/storage/Users/currentUser/...` can be revealed, where `<top>` maps to a
-  file-manager virtual name (`docs`→`Documents`, `desktop`→`Desktop`,
-  `download`→`Download`, `pictures`→`Images`, `music`/`audio`→`Music`,
-  `videos`→`Videos`); other prefixes are rejected with a documented error.
-  Only `docs`→`Documents` has been verified end-to-end through this API on a
-  2in1 desktop; the other virtual names are known to be accepted by the file
-  manager (direct Want experiments) but their mappings lack end-to-end
-  verification.
+  virtual name in `external_storage_uuid` (`docs`→`Documents`,
+  `desktop`→`Desktop`, `download`→`Download`, `pictures`→`Images`,
+  `music`/`audio`→`Music`, `videos`→`Videos`); other prefixes are rejected
+  with a documented error.
 
 ## Contributing
 
