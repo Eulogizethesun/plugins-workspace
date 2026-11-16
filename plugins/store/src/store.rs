@@ -689,16 +689,28 @@ impl<R: Runtime> Store<R> {
 
 impl<R: Runtime> Drop for Store<R> {
     fn drop(&mut self) {
-        // OHOS: non-blocking best-effort instead of a full skip. `try_lock`
-        // never blocks: a contended sender mutex means an in-flight debounce
-        // task holds it, and that task has already committed to saving (its
-        // `take()` runs in a microsecond window before the file I/O), so
-        // skipping is safe. With no pending sender this is a no-op — on a
-        // normal exit the RunEvent::Exit handler drains the sender first.
-        // The guard is dropped before `save_or_skip` runs (it re-locks this
-        // mutex internally — the upstream #3572 deadlock pattern). A directly
-        // killed process still loses the ≤100ms debounce window; callers
-        // should `save()` explicitly for critical data.
+        // OHOS: best-effort **synchronous** save. When an auto-save debounce
+        // is pending, `try_lock` (never blocks) takes the debounce sender,
+        // cancels the pending task and calls `save_or_skip` — which performs
+        // a synchronous `fs::create_dir_all` + `fs::write` on the calling
+        // thread. Dropping a `Store` (e.g. via `store.close()`) with a
+        // pending auto-save can therefore block the caller for the duration
+        // of the file I/O; this is the accepted trade-off (#210): the
+        // alternative — skipping the save — silently loses up to the whole
+        // debounce interval of writes, while the blocking window is one
+        // small file write.
+        //
+        // Skips (no write, data stays in memory only): the debounce-sender
+        // mutex is contended — `trigger_auto_save`, `save()` or the debounce
+        // task itself hold it (this path is silent) — or `StoreInner` is
+        // locked inside `save_or_skip` (that path logs a
+        // `tracing::warn!`). The guard is dropped before `save_or_skip`
+        // runs (it re-locks this mutex internally — the upstream #3572
+        // deadlock pattern).
+        //
+        // The only data-loss window is a directly killed process within the
+        // ≤100ms debounce interval; callers should `save()` explicitly for
+        // critical data.
         #[cfg(target_env = "ohos")]
         {
             let sender = match self.auto_save_debounce_sender.try_lock() {

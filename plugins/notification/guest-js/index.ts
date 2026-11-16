@@ -87,7 +87,9 @@ interface Options {
   /**
    * Instructs the system that this notification is the summary of a group on Android.
    *
-   * On HarmonyOS (OHOS): ignored — no system equivalent.
+   * OHOS: not supported — the system notification request has no group-summary
+   * equivalent (the concept is Android-only; the request only exposes a group
+   * name, which {@link Options.group} maps to).
    */
   groupSummary?: boolean
   /**
@@ -113,7 +115,12 @@ interface Options {
    *
    * On Android the icon must be placed in the app's `res/drawable` folder.
    *
-   * On HarmonyOS (OHOS): ignored — decoded PixelMap icons are not wired up.
+   * On OHOS: maps to the system notification small icon (`smallIcon`,
+   * image.PixelMap). The value is resolved as a rawfile resource name first
+   * (app `resources/rawfile` directory), then as a file path or `file://`
+   * URI. Sources that fail to resolve or decode, and images whose pixel
+   * bytes exceed the system limit (192 KB), are dropped with a warning —
+   * the notification still fires, just without the icon.
    */
   icon?: string
   /**
@@ -121,19 +128,32 @@ interface Options {
    *
    * The icon must be placed in the app's `res/drawable` folder.
    *
-   * On HarmonyOS (OHOS): ignored — decoded PixelMap icons are not wired up.
+   * On OHOS: maps to the system notification large icon (`largeIcon`,
+   * image.PixelMap). Resolution and degradation behave exactly like
+   * {@link Options.icon} (rawfile name first, then path/`file://` URI;
+   * undecodable or oversized sources are dropped with a warning).
    */
   largeIcon?: string
   /**
    * Icon color on Android.
    *
-   * On HarmonyOS (OHOS): ignored — no system equivalent.
+   * OHOS: not supported — the system request has a `color` field, but its
+   * SDK documentation states "Background color of the notification. Not
+   * supported currently" (notificationRequest.d.ts), so the value is not
+   * forwarded (mapping it would silently do nothing).
    */
   iconColor?: string
   /**
    * Notification attachments.
    *
-   * On HarmonyOS (OHOS): ignored — no system equivalent.
+   * On OHOS: the first attachment that decodes switches the notification to
+   * the system picture layout (NOTIFICATION_CONTENT_PICTURE) — the picture
+   * is shown when the notification is expanded, and it replaces the
+   * basic/long-text/multiline layout. Later attachments are ignored.
+   * Attachment URLs are resolved as file paths or `file://` URIs (the
+   * `asset` protocol is not readable from the notification plugin). If no
+   * attachment decodes, or the image exceeds the system limit (2 MB pixel
+   * bytes), the notification keeps its regular layout.
    */
   attachments?: Attachment[]
   /**
@@ -160,7 +180,10 @@ interface Options {
   /**
    * Changes the notification presentation to be silent on iOS (no badge, no sound, not listed).
    *
-   * On HarmonyOS (OHOS): ignored — no per-notification system equivalent.
+   * OHOS: not supported — per-notification muting has no system equivalent.
+   * Notification slots are created by type only (`addSlot` accepts just a
+   * SlotType) and their configuration is read-only, so sound behavior cannot
+   * be silenced per notification.
    */
   silent?: boolean
   /**
@@ -268,7 +291,12 @@ class Schedule {
 interface Attachment {
   /** Attachment identifier. */
   id: string
-  /** Attachment URL. Accepts the `asset` and `file` protocols. */
+  /**
+   * Attachment URL. Accepts the `asset` and `file` protocols.
+   *
+   * On OHOS the `asset` protocol is not readable from the notification
+   * plugin; attachment URLs are resolved as file paths or `file://` URIs.
+   */
   url: string
 }
 

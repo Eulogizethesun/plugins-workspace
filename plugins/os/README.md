@@ -63,6 +63,15 @@ import { version } from '@tauri-apps/plugin-os'
 const osVersion = await version()
 ```
 
+## Platform-specific notes (OpenHarmony)
+
+- **`hostname()`** — OHOS exposes no public hostname API (the SDK API surface
+  has no hostname getter; the only candidate, `settings.general.DEVICE_NAME`,
+  is the user-facing device name, not a network hostname). On OHOS the
+  function returns the neutral placeholder `"localhost"` and logs a one-time
+  warning — it never fabricates a device-specific value. Applications that
+  need a real hostname must resolve one themselves.
+
 ## Contributing
 
 PRs accepted. Please make sure to read the Contributing Guide before making a pull request.

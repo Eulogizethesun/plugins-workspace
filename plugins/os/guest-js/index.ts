@@ -173,6 +173,13 @@ async function locale(): Promise<string | null> {
 
 /**
  * Returns the host name of the operating system.
+ *
+ * OHOS: the platform has no public hostname API (the only candidate,
+ * `settings.general.DEVICE_NAME`, is the user-facing device name, not a
+ * hostname), so the plugin returns the neutral placeholder `"localhost"`
+ * and logs a one-time warning instead of fabricating a device-specific
+ * value.
+ *
  * @example
  * ```typescript
  * import { hostname } from '@tauri-apps/plugin-os';

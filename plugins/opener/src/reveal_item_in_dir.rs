@@ -78,12 +78,17 @@ where
 }
 
 /// OHOS variant of [`reveal_item_in_dir`]: async — the reveal goes through the
-/// openharmony-ability bridge (TSFN → ArkTS file-manager Want). The ArkTS side
-/// launches the Huawei file manager (`com.huawei.hmos.filemanager`) with an
-/// explicit Want — the only form empirically verified to reach it (a generic
-/// `viewData` + `file://` Want falls through to the notepad handler). There is
-/// no fallback: on systems without that file manager the startAbility error is
-/// propagated to the caller.
+/// openharmony-ability bridge (TSFN → ArkTS Want). The ArkTS side starts an
+/// **implicit** Want — `action: "ohos.want.action.viewData"` with the parent
+/// directory URI in `want.parameters.fileUri` (a file-manager virtual URI
+/// where the public-directory prefix's top-level directory is mapped to a
+/// virtual name inside the URI value; `want.parameters.external_storage_uuid`
+/// is the constant `"LOCAL"`, the local disk id) and the
+/// `FLAG_AUTH_READ_URI_PERMISSION` flag — and lets the system resolve the
+/// handler; no bundle name is hardcoded. When no handler matches the Want,
+/// `startAbility` fails with error 16000019 ("No matching ability is found")
+/// and the plugin surfaces a clear "reveal is not supported" error to the
+/// caller.
 #[cfg(target_env = "ohos")]
 pub async fn reveal_item_in_dir<P: AsRef<Path>>(path: P) -> crate::Result<()> {
     reveal_items_in_dir(std::iter::once(path)).await
@@ -104,8 +109,9 @@ where
         // are NOT accessible from the app's mount namespace (hmmac returns
         // ENOENT even for existing paths), so canonicalize would fail for the
         // very paths that CAN be revealed. Pass the raw path through — the
-        // ArkTS side maps known public prefixes to file-manager virtual uris
-        // and the file manager itself is the arbiter of what it opens.
+        // ArkTS side maps known public prefixes to the directory URI carried
+        // in the Want and the handler resolved by the system is the arbiter
+        // of what it opens.
         // Sandbox paths (the only ones the app can see) keep full validation.
         let path = canonicalize(path.as_ref()).unwrap_or_else(|_| path.as_ref().to_path_buf());
         canonicalized.push(path);
@@ -138,12 +144,14 @@ mod imp {
                 .parent()
                 .ok_or_else(|| crate::Error::NoParent(path.to_path_buf()))?;
             // Pass the REAL filesystem path of the parent directory. The ArkTS
-            // side (UrlPlugin.ets) maps it to the file-manager virtual uri and
-            // starts an explicit file-manager Want. We do NOT build a file://
-            // URL here — real-path-form file:// URIs never match the 2in1 file
-            // manager (only archive utd types are registered for viewData).
-            // Sandbox/unmappable-prefix detection is done ArkTS-side (it owns
-            // OHOS sandbox layout knowledge) and surfaces as a documented error.
+            // side (UrlPlugin.ets) maps it to the directory URI carried in
+            // want.parameters.fileUri (with the public-prefix virtual-name
+            // mapping in external_storage_uuid) and starts an implicit
+            // viewData Want — the system resolves the handler, no bundle
+            // name is hardcoded. Sandbox/unmappable-prefix detection is done
+            // ArkTS-side (it owns OHOS sandbox layout knowledge) and surfaces
+            // as a documented error; a Want matching no handler surfaces as
+            // "reveal is not supported" (startAbility error 16000019).
             use openharmony_ability_plugin_url::UrlExt;
             let ohos_app = crate::ohos_app()?;
             ohos_app

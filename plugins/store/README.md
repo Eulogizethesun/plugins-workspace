@@ -156,6 +156,8 @@ On OHOS (`target_env = "ohos"`), the `RunEvent::Exit` save path is hardened agai
 
 Applications should rely on auto-save debounce and the `Drop` fallback for durability; the exit-time skip only occurs under the rare "process exit + lock contention" double condition. Other platforms are unchanged — `on_event` keeps the blocking `read().unwrap()` / `save()` semantics.
 
+**`Drop` semantics (best-effort synchronous save):** when a `Store` is dropped (e.g. via `store.close()`) while an auto-save debounce is pending, the plugin cancels the debounce task and performs a **synchronous** `fs::write` on the calling thread. This can block the caller for the duration of one small file write — an accepted trade-off against silently losing the pending writes. The save is skipped (data stays in memory only, until another save path runs) when the debounce-sender mutex or the store mutex is contended by `trigger_auto_save`/`save()`/an in-flight debounce task. The only data-loss window is a directly killed process within the ≤100ms debounce interval; applications should call `save()` explicitly for critical data.
+
 > Note: this version of the plugin has no file-watch (`notify`) mechanism; the hardening targets the `RunEvent::Exit` lock contention path only.
 
 ## License
