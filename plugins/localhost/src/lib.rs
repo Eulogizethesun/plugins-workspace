@@ -105,20 +105,56 @@ impl Builder {
                 // asset server is far harder to diagnose than a failed start.
                 // Binding is a fast syscall; the accept loop still runs on
                 // the spawned thread below.
+                //
+                // OHOS retry carve-out: the AMS restart race can relaunch a
+                // second instance while the dying predecessor still holds the
+                // port (EADDRINUSE / os error 98) — its sockets close once the
+                // process is reaped, typically within seconds. Retrying only
+                // AddrInUse with a short backoff rides that race out; any
+                // other bind error, or a port still occupied after the
+                // deadline, fails setup exactly as before (fail-fast contract
+                // preserved for real misconfig such as a squatted port).
                 #[cfg(target_env = "ohos")]
                 let bind_addr = format!("127.0.0.1:{}", port);
                 #[cfg(target_env = "ohos")]
-                let server = match Server::http(&bind_addr) {
-                    Ok(s) => {
-                        log::info!("[localhost plugin] listening on {}", bind_addr);
-                        s
-                    }
-                    Err(e) => {
-                        return Err(format!(
-                            "[localhost plugin] failed to bind {}: {}",
-                            bind_addr, e
-                        )
-                        .into());
+                let server = {
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                    loop {
+                        match Server::http(&bind_addr) {
+                            Ok(s) => {
+                                log::info!("[localhost plugin] listening on {}", bind_addr);
+                                break s;
+                            }
+                            // tiny_http::Server::http returns Box<dyn Error>;
+                            // the bind failure is an std::io::Error boxed
+                            // inside it (os error 98 = EADDRINUSE), so the
+                            // transient-race check goes through a downcast.
+                            Err(e) if e
+                                .downcast_ref::<std::io::Error>()
+                                .map(|io| io.kind() == std::io::ErrorKind::AddrInUse)
+                                .unwrap_or(false) =>
+                            {
+                                if std::time::Instant::now() >= deadline {
+                                    return Err(format!(
+                                        "[localhost plugin] failed to bind {}: {} (still occupied after 10s)",
+                                        bind_addr, e
+                                    )
+                                    .into());
+                                }
+                                log::warn!(
+                                    "[localhost plugin] {} occupied by a dying predecessor; retrying",
+                                    bind_addr
+                                );
+                                std::thread::sleep(std::time::Duration::from_millis(250));
+                            }
+                            Err(e) => {
+                                return Err(format!(
+                                    "[localhost plugin] failed to bind {}: {}",
+                                    bind_addr, e
+                                )
+                                .into());
+                            }
+                        }
                     }
                 };
 
